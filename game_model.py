@@ -53,6 +53,13 @@ class Card:
     def __repr__(self):
         return str(self)
 
+    def __eq__(self, other):
+        return isinstance(other, Card) and self.suit == other.suit and self.value == other.value
+
+    def __hash__(self):
+        return hash((self.suit, self.value))
+
+
 
 class FreeCellGame:
     def __init__(self):
@@ -205,3 +212,12 @@ class FreeCellGame:
 
     def clone(self):
         return copy.deepcopy(self)
+    
+    def __eq__(self, other):
+        if not isinstance(other, FreeCellGame):
+            return False
+        return (
+            self.columns == other.columns and
+            self.free_cells == other.free_cells and
+            self.home_cells == other.home_cells
+        )

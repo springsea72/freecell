@@ -136,9 +136,6 @@ class GameGUI:
         self.start_pos = (event.x, event.y)
 
     def on_release(self, event):
-        if self.selected_card:
-            self.history.append(self.game.clone())
-
         if not self.selected_card:
             return
 
@@ -152,6 +149,7 @@ class GameGUI:
             to_col_idx = self.get_column_index_at(drop_x, drop_y)
             if to_col_idx is not None and to_col_idx != from_col_idx:
                 if self.game.can_move_to_column(self.selected_card, self.game.columns[to_col_idx]):
+                    self.history.append(self.game.clone())  # ✅ 记录历史
                     self.game.columns[to_col_idx].append(self.game.columns[from_col_idx].pop())
                     moved = True
 
@@ -159,6 +157,7 @@ class GameGUI:
             if not moved:
                 free_idx = self.get_free_cell_index_at(drop_x, drop_y)
                 if free_idx is not None and self.game.free_cells[free_idx] is None:
+                    self.history.append(self.game.clone())  # ✅ 记录历史
                     self.game.free_cells[free_idx] = self.game.columns[from_col_idx].pop()
                     moved = True
 
@@ -166,23 +165,25 @@ class GameGUI:
             if not moved:
                 if self.is_home_cell_area(drop_x, drop_y):
                     if self.game.can_move_to_home(self.selected_card):
+                        self.history.append(self.game.clone())  # ✅ 记录历史
                         self.game.home_cells[self.selected_card.suit].append(self.game.columns[from_col_idx].pop())
                         moved = True
 
-        # ✅ 4. 空当 → 列（新增）
+        # 4. 空当 → 列
         if not moved:
             from_free_idx = self.find_card_in_free_cells(self.selected_card)
             to_col_idx = self.get_column_index_at(drop_x, drop_y)
             if from_free_idx is not None and to_col_idx is not None:
                 if self.game.can_move_to_column(self.selected_card, self.game.columns[to_col_idx]):
+                    self.history.append(self.game.clone())  # ✅ 记录历史
                     self.game.columns[to_col_idx].append(self.selected_card)
                     self.game.free_cells[from_free_idx] = None
                     moved = True
 
-        # 最后刷新界面
         self.selected_card = None
         self.render()
         self.check_victory()
+
 
 
 
@@ -239,10 +240,13 @@ class GameGUI:
         self.render()
 
     def on_right_click(self, event):
-        self.history.append(self.game.clone())
-
+        # 判断是否真的会发生归堆再记录历史
+        snapshot = self.game.clone()
         self.auto_move_to_home()
+        if snapshot != self.game:
+            self.history.append(snapshot)
         self.check_victory()
+
 
 
     def check_victory(self):
