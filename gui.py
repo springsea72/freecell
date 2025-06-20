@@ -12,28 +12,36 @@ BG_COLOR = "#357960"
 class GameGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("空当接龙 FreeCell AI")
-        self.canvas = tk.Canvas(root, width=1000, height=600, bg=BG_COLOR)
+        self.root.title("空当接龙 FreeCell")
+
+        # 主体框架
+        self.main_frame = tk.Frame(root)
+        self.main_frame.pack()
+
+        # 游戏画布
+        self.canvas = tk.Canvas(self.main_frame, width=1000, height=600, bg=BG_COLOR)
         self.canvas.pack()
 
+        # 保持按钮始终在底部显示
+        self.restart_button = tk.Button(self.root, text="重开一局", command=self.restart_game)
+        self.restart_button.pack(pady=10)
+
+        # 初始化游戏逻辑和界面状态
         self.game = FreeCellGame()
         self.card_widgets = {}  # Card对象 → Canvas对象
         self.selected_card = None
         self.start_pos = None
+        self.history = []
 
-        self.render()
-
+        # 绑定鼠标和键盘事件
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
-
-        self.restart_button = tk.Button(self.root, text="重新开始", command=self.restart_game)
-        self.restart_button.pack(pady=10)
-
-        self.history = []
-        # 绑定 Ctrl+Z
         self.root.bind_all("<Control-z>", self.undo)
+
+        self.render()
+
 
 
 
@@ -41,7 +49,7 @@ class GameGUI:
         self.canvas.delete("all")
         self.card_widgets.clear()
 
-        CARD_SPACING_Y = 25  # 每张牌垂直错开距离（建议 20~35 之间）
+        CARD_SPACING_Y = 27  # 每张牌垂直错开距离（建议 20~35 之间）
 
         # 空当 & home 显示
         for i in range(4):
@@ -72,7 +80,7 @@ class GameGUI:
         # 背景矩形（牌）
         rect = self.canvas.create_rectangle(
             x, y, x + CARD_WIDTH, y + CARD_HEIGHT,
-            fill="white" if card.color() == "red" else "black"
+            fill="white" #注释掉后面，改为全用白底  if card.color() == "red" else "black"
         )
 
         # 文本显示在牌的顶部，稍微靠右
@@ -80,7 +88,7 @@ class GameGUI:
             x + 10, y + 12,
             text=str(card),
             anchor="nw",  # 左上角对齐
-            fill="black" if card.color() == "red" else "white",
+            fill="#C41E3A" if card.color() == "red" else "black",
             font=("Arial", 12, "bold")
         )
 
