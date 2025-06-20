@@ -1,6 +1,8 @@
 # gui.py
 import tkinter as tk
 from game_model import FreeCellGame, Card, Move, MoveType
+from tkinter import messagebox
+
 
 CARD_WIDTH = 60
 CARD_HEIGHT = 80
@@ -31,6 +33,7 @@ class GameGUI:
         self.card_widgets = {}  # Card对象 → Canvas对象
         self.selected_card = None
         self.start_pos = None
+        self.victory = False  # 是否胜利标志
         self.history = []
 
         # 绑定鼠标和键盘事件
@@ -260,19 +263,29 @@ class GameGUI:
     def check_victory(self):
         total_home_cards = sum(len(stack) for stack in self.game.home_cells.values())
         if total_home_cards == 52:
+            self.victory = True
             self.canvas.create_text(
                 500, 300,
                 text="🎉 胜利！你赢了！ 🎉",
                 fill="yellow",
-                font=("Arial", 32, "bold")
+                font=("Arial", 24, "bold"),
+                tags="victory_text"
             )
 
-    def restart_game(self):
-        self.history.clear()  # 重开时清空历史
 
-        self.game = FreeCellGame()  # 重新初始化游戏
-        self.selected_card = None   # 清除当前拖动状态
-        self.render()               # 重绘界面
+    def restart_game(self):
+        if not self.victory:
+            # 弹出确认对话框
+            confirm = messagebox.askyesno("确认", "是否要开启一局新游戏？")
+            if not confirm:
+                return  # 用户选择否，取消重开
+
+        self.victory = False  # 重置胜利状态
+        self.history.clear()
+        self.game = FreeCellGame()
+        self.selected_card = None
+        self.render()
+
 
     def undo(self, event=None):
         if self.history:
