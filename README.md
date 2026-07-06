@@ -18,6 +18,7 @@
 - `autoplay.py` 可以按固定 seed 运行求解器并验证成功路径。
 - `benchmark.py` 可以批量评估固定 seed 的求解率、节点数、路径长度和耗时。
 - 已解牌局可以导出为 JSON trace，并通过 `replay.py` 复现校验。
+- `dataset_builder.py` 可以把已解 trace 转换为 JSONL 策略学习样本。
 - 使用标准库 `unittest` 覆盖核心规则、求解器、自动游玩入口和基准评估工具。
 
 ## 环境要求
@@ -78,6 +79,14 @@ python benchmark.py --seeds 1 2 3 --max-nodes 1000 --max-depth 100 --format csv
 python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200 --save-solved-traces traces
 ```
 
+生成策略学习数据集：
+
+```powershell
+cd D:\freecell
+python dataset_builder.py --trace traces\seed_000001.json --output datasets\one.jsonl
+python dataset_builder.py --trace-dir traces --output datasets\freecell_policy.jsonl --skip-invalid
+```
+
 运行测试：
 
 ```powershell
@@ -94,6 +103,7 @@ freecell/
 ├── autoplay.py     # 按 seed 自动求解并验证路径
 ├── replay.py       # 回放并验证已保存的求解 trace
 ├── trace_io.py     # JSON trace 读写与验证
+├── dataset_builder.py # 从 solved trace 生成 JSONL 样本
 ├── benchmark.py    # 批量求解器评估工具
 ├── gui.py          # Tkinter 图形界面和交互逻辑
 ├── main.py         # 命令行游戏入口
@@ -148,10 +158,16 @@ freecell/
 - 汇总求解率、平均耗时、平均探索节点数和已解路径平均长度。
 - 支持 `--save-solved-traces` 批量保存已解牌局 trace。
 
+`dataset_builder.py` 用于生成后续策略学习数据：
+
+- 从一个或多个 solved trace 生成 JSONL。
+- 每条样本包含 action 前状态、合法动作集合、求解路径选择的动作和 action index。
+- 默认遇到非法 trace 返回非 0；`--skip-invalid` 可跳过坏 trace。
+
 ## 当前限制和后续方向
 
 - 图形界面依赖 Tkinter；如果当前 Python 环境没有安装 Tkinter，`gui.py` 无法启动。
 - 求解器目前是启发式离线搜索，不保证在给定节点/深度上解出所有牌局。
 - 当前还没有 GUI 自动播放控制。
-- AI 训练和策略学习尚未实现；当前 trace 可以作为后续训练数据生成的基础。
+- AI 训练和策略模型尚未实现；当前 JSONL 数据集可以作为后续训练输入。
 - `test.py` 目前只打印 Python 解释器路径，后续可以删除或改为更有用的开发入口。
