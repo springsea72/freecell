@@ -148,10 +148,13 @@ class FreeCellGame:
                 return sequence[:i - 1]
         return sequence
 
-    def max_movable_sequence_length(self) -> int:
+    def max_movable_sequence_length(self, to_col_idx=None) -> int:
         empty_free_cells = sum(1 for cell in self.free_cells if cell is None)
         empty_columns = sum(1 for col in self.columns if not col)
-        return (empty_free_cells + 1) * (2 ** empty_columns)
+        effective_empty_columns = empty_columns
+        if self._valid_column_index(to_col_idx) and not self.columns[to_col_idx]:
+            effective_empty_columns -= 1
+        return (empty_free_cells + 1) * (2 ** effective_empty_columns)
 
     def can_move_sequence_between_columns(self, from_col_idx: int, to_col_idx: int, count: int = 1) -> bool:
         if not self._valid_column_index(from_col_idx) or not self._valid_column_index(to_col_idx):
@@ -166,7 +169,7 @@ class FreeCellGame:
         sequence = from_col[-count:]
         if not self.is_valid_sequence(sequence):
             return False
-        if count > self.max_movable_sequence_length():
+        if count > self.max_movable_sequence_length(to_col_idx):
             return False
         return self.can_move_to_column(sequence[0], self.columns[to_col_idx])
 
