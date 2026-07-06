@@ -1,6 +1,6 @@
 # 空当接龙 FreeCell
 
-这是一个用 Python 编写的空当接龙游戏项目。项目目前包含可复用的游戏规则模型、Tkinter 图形界面和一个简单的命令行入口，可以作为后续开发自动求解器或 AI 训练环境的基础。
+这是一个用 Python 编写的空当接龙游戏项目。项目目前包含可复用的游戏规则模型、Tkinter 图形界面、命令行入口、离线搜索求解器和求解器基准评估工具，可以作为后续开发自动游玩和 AI 训练环境的基础。
 
 ## 功能特性
 
@@ -14,6 +14,10 @@
 - 图形界面支持鼠标拖拽单张牌和合法连续牌组。
 - 支持右键自动归堆、`Ctrl+Z` 撤销、重开一局和胜利检测。
 - 命令行入口可以展示当前牌局、列出合法动作，并按编号执行动作。
+- 离线求解器基于核心模型生成合法动作、执行搜索并返回可重放路径。
+- `autoplay.py` 可以按固定 seed 运行求解器并验证成功路径。
+- `benchmark.py` 可以批量评估固定 seed 的求解率、节点数、路径长度和耗时。
+- 使用标准库 `unittest` 覆盖核心规则、求解器、自动游玩入口和基准评估工具。
 
 ## 环境要求
 
@@ -49,13 +53,40 @@ python main.py
 
 命令行版本会打印当前牌局状态和可选动作，输入动作编号执行对应移动，输入 `q` 退出。
 
+运行离线求解器：
+
+```powershell
+cd D:\freecell
+python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200
+```
+
+批量评估求解器：
+
+```powershell
+cd D:\freecell
+python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200
+python benchmark.py --seeds 1 2 3 --max-nodes 1000 --max-depth 100 --format csv
+```
+
+运行测试：
+
+```powershell
+cd D:\freecell
+python -m unittest discover -s tests
+```
+
 ## 项目结构
 
 ```text
 freecell/
 ├── game_model.py   # 牌、移动类型和 FreeCellGame 核心规则模型
+├── solver.py       # 离线搜索求解器
+├── autoplay.py     # 按 seed 自动求解并验证路径
+├── benchmark.py    # 批量求解器评估工具
 ├── gui.py          # Tkinter 图形界面和交互逻辑
 ├── main.py         # 命令行游戏入口
+├── benchmarks/     # 固定基准 seed 列表
+├── tests/          # unittest 测试
 ├── test.py         # 当前仅用于打印 Python 解释器路径
 ├── .gitignore      # 忽略编辑器配置和 Python 缓存目录
 └── README.md       # 项目说明文档
@@ -69,21 +100,39 @@ freecell/
 - `Card`：单张牌，包含花色、点数、颜色和字符串显示。
 - `MoveType`：移动类型枚举。
 - `Move`：一次可执行移动的描述。
-- `FreeCellGame`：维护 8 列牌堆、4 个空当位和 4 个目标堆，并提供合法移动判断、移动执行、合法动作生成、状态克隆和状态比较能力。
+- `FreeCellGame`：维护 8 列牌堆、4 个空当位和 4 个目标堆，并提供合法移动判断、统一移动执行、合法动作生成、状态克隆、状态哈希、胜利/终止判断和自动归堆能力。
 
 `gui.py` 基于 `FreeCellGame` 实现图形界面：
 
 - 使用 `tkinter.Canvas` 绘制牌桌、空当位、目标堆和牌列。
 - 支持拖拽移动牌。
-- 支持连续牌组移动，并根据空当位和空列数量计算最大可移动长度。
+- 支持连续牌组移动，并复用核心模型判断最大可移动长度。
 - 通过历史快照实现撤销。
 - 检测 52 张牌全部归入目标堆后的胜利状态。
 
 `main.py` 是命令行入口，主要用于直接观察游戏状态、查看当前合法动作并执行移动。
 
+`solver.py` 提供离线搜索求解器：
+
+- `SolveResult`：保存是否解出、动作路径、探索节点数、生成节点数、最大 frontier 和结束原因。
+- `solve(game, max_nodes=50000, max_depth=200)`：在不修改输入游戏状态的前提下搜索可重放解法。
+- 求解器只通过 `FreeCellGame` 的模型层接口生成和执行动作。
+
+`autoplay.py` 是求解器命令行入口：
+
+- 支持 `--seed`、`--max-nodes`、`--max-depth`。
+- 解出时打印路径并在 clone 上重放验证，验证失败会返回非 0 退出码。
+
+`benchmark.py` 用于批量评估：
+
+- 支持显式 seed 列表或 seed 区间。
+- 支持 `text` 和 `csv` 输出。
+- 汇总求解率、平均耗时、平均探索节点数和已解路径平均长度。
+
 ## 当前限制和后续方向
 
-- 还没有正式的自动化测试；`test.py` 目前只打印 Python 解释器路径。
-- 命令行版本的交互能力比较基础，主要用于调试核心规则。
-- AI 训练、自动求解器、胜率统计和牌局保存/读取功能尚未实现。
-- 核心模型当前主要覆盖单张牌移动；图形界面额外实现了连续牌组拖拽。
+- 图形界面依赖 Tkinter；如果当前 Python 环境没有安装 Tkinter，`gui.py` 无法启动。
+- 求解器目前是启发式离线搜索，不保证在给定节点/深度上解出所有牌局。
+- 当前还没有 GUI 自动播放控制。
+- AI 训练、策略学习和训练数据导出尚未实现。
+- `test.py` 目前只打印 Python 解释器路径，后续可以删除或改为更有用的开发入口。
