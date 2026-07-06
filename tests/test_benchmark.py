@@ -1,6 +1,8 @@
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 import benchmark
@@ -71,6 +73,31 @@ class BenchmarkTests(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         self.assertIn("max_nodes_exceeded", output.getvalue())
+
+    def test_save_solved_traces_only_saves_solved_results(self):
+        solved = SolveResult(True, [], 1, 1, 1, "won")
+        unsolved = SolveResult(False, [], 1, 0, 0, "max_nodes_exceeded")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_dir = Path(tmpdir) / "traces"
+            with patch("benchmark.solve", side_effect=[solved, unsolved]), patch(
+                "benchmark.time.perf_counter", side_effect=[1.0, 1.1, 2.0, 2.2]
+            ), patch("benchmark.save_trace") as save_trace, patch(
+                "benchmark.load_trace", return_value={}
+            ), patch(
+                "benchmark.verify_trace", return_value=True
+            ):
+                records = benchmark.run_benchmark(
+                    [1, 2],
+                    max_nodes=10,
+                    max_depth=5,
+                    save_solved_traces=trace_dir,
+                )
+
+            self.assertTrue(trace_dir.exists())
+
+        self.assertEqual([True, False], [record.solved for record in records])
+        save_trace.assert_called_once_with(trace_dir / "seed_000001.json", 1, 10, 5, solved)
 
 
 if __name__ == "__main__":

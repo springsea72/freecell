@@ -4,10 +4,12 @@ import io
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List
 
 from game_model import FreeCellGame
 from solver import solve
+from trace_io import load_trace, save_trace, verify_trace
 
 
 @dataclass
@@ -41,6 +43,7 @@ def parse_args(argv=None):
     parser.add_argument("--max-nodes", type=int, default=50000)
     parser.add_argument("--max-depth", type=int, default=200)
     parser.add_argument("--format", choices=("text", "csv"), default="text")
+    parser.add_argument("--save-solved-traces", default=None)
     args = parser.parse_args(argv)
 
     if args.seeds is not None and args.seed_count is not None:
@@ -62,13 +65,33 @@ def seeds_from_args(args) -> List[int]:
     return list(range(args.seed_start, args.seed_start + args.seed_count))
 
 
-def run_benchmark(seeds: Iterable[int], max_nodes: int, max_depth: int) -> List[BenchmarkRecord]:
+def trace_filename(seed: int) -> str:
+    return f"seed_{seed:06d}.json"
+
+
+def run_benchmark(
+    seeds: Iterable[int],
+    max_nodes: int,
+    max_depth: int,
+    save_solved_traces=None,
+) -> List[BenchmarkRecord]:
     records = []
+    trace_dir = Path(save_solved_traces) if save_solved_traces is not None else None
+    if trace_dir is not None:
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
     for seed in seeds:
         game = FreeCellGame(seed=seed)
         started = time.perf_counter()
         result = solve(game, max_nodes=max_nodes, max_depth=max_depth)
         elapsed_seconds = time.perf_counter() - started
+
+        if trace_dir is not None and result.solved:
+            trace_path = trace_dir / trace_filename(seed)
+            save_trace(trace_path, seed, max_nodes, max_depth, result)
+            if not verify_trace(load_trace(trace_path)):
+                raise ValueError(f"saved trace failed verification: {trace_path}")
+
         records.append(
             BenchmarkRecord(
                 seed=seed,
@@ -195,6 +218,7 @@ def main(argv=None):
         seeds_from_args(args),
         max_nodes=args.max_nodes,
         max_depth=args.max_depth,
+        save_solved_traces=args.save_solved_traces,
     )
     print(render(records, args.format))
     return 0

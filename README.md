@@ -17,6 +17,7 @@
 - 离线求解器基于核心模型生成合法动作、执行搜索并返回可重放路径。
 - `autoplay.py` 可以按固定 seed 运行求解器并验证成功路径。
 - `benchmark.py` 可以批量评估固定 seed 的求解率、节点数、路径长度和耗时。
+- 已解牌局可以导出为 JSON trace，并通过 `replay.py` 复现校验。
 - 使用标准库 `unittest` 覆盖核心规则、求解器、自动游玩入口和基准评估工具。
 
 ## 环境要求
@@ -58,6 +59,14 @@ python main.py
 ```powershell
 cd D:\freecell
 python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200
+python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200 --save-trace traces\seed_000001.json
+```
+
+回放已保存的求解路径：
+
+```powershell
+cd D:\freecell
+python replay.py traces\seed_000001.json
 ```
 
 批量评估求解器：
@@ -66,6 +75,7 @@ python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200
 cd D:\freecell
 python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200
 python benchmark.py --seeds 1 2 3 --max-nodes 1000 --max-depth 100 --format csv
+python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200 --save-solved-traces traces
 ```
 
 运行测试：
@@ -82,6 +92,8 @@ freecell/
 ├── game_model.py   # 牌、移动类型和 FreeCellGame 核心规则模型
 ├── solver.py       # 离线搜索求解器
 ├── autoplay.py     # 按 seed 自动求解并验证路径
+├── replay.py       # 回放并验证已保存的求解 trace
+├── trace_io.py     # JSON trace 读写与验证
 ├── benchmark.py    # 批量求解器评估工具
 ├── gui.py          # Tkinter 图形界面和交互逻辑
 ├── main.py         # 命令行游戏入口
@@ -122,17 +134,24 @@ freecell/
 
 - 支持 `--seed`、`--max-nodes`、`--max-depth`。
 - 解出时打印路径并在 clone 上重放验证，验证失败会返回非 0 退出码。
+- 支持 `--save-trace` 保存已验证成功的解法 JSON。
+
+`trace_io.py` 和 `replay.py` 负责求解路径持久化：
+
+- trace 使用 UTF-8 JSON，记录 seed、搜索参数、结果统计和动作序列。
+- `replay.py` 从 trace 重新创建牌局并逐步应用动作，验证失败会返回非 0 退出码。
 
 `benchmark.py` 用于批量评估：
 
 - 支持显式 seed 列表或 seed 区间。
 - 支持 `text` 和 `csv` 输出。
 - 汇总求解率、平均耗时、平均探索节点数和已解路径平均长度。
+- 支持 `--save-solved-traces` 批量保存已解牌局 trace。
 
 ## 当前限制和后续方向
 
 - 图形界面依赖 Tkinter；如果当前 Python 环境没有安装 Tkinter，`gui.py` 无法启动。
 - 求解器目前是启发式离线搜索，不保证在给定节点/深度上解出所有牌局。
 - 当前还没有 GUI 自动播放控制。
-- AI 训练、策略学习和训练数据导出尚未实现。
+- AI 训练和策略学习尚未实现；当前 trace 可以作为后续训练数据生成的基础。
 - `test.py` 目前只打印 Python 解释器路径，后续可以删除或改为更有用的开发入口。

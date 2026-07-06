@@ -3,6 +3,7 @@ import sys
 
 from game_model import FreeCellGame
 from solver import solve
+from trace_io import save_trace
 
 
 def configure_console_encoding():
@@ -25,7 +26,12 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-nodes", type=int, default=10000)
     parser.add_argument("--max-depth", type=int, default=200)
+    parser.add_argument("--save-trace", default=None)
     args = parser.parse_args(argv)
+
+    if args.save_trace is not None and args.seed is None:
+        print("--save-trace requires --seed", file=sys.stderr)
+        return 1
 
     game = FreeCellGame(seed=args.seed)
     result = solve(game, max_nodes=args.max_nodes, max_depth=args.max_depth)
@@ -44,6 +50,12 @@ def main(argv=None):
         print(f"verified_won: {verified_won}")
         if not verified_won:
             return 1
+        if args.save_trace is not None:
+            try:
+                save_trace(args.save_trace, args.seed, args.max_nodes, args.max_depth, result)
+            except (OSError, ValueError) as exc:
+                print(f"failed to save trace: {exc}", file=sys.stderr)
+                return 1
 
     return 0
 

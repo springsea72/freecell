@@ -1,4 +1,5 @@
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -55,6 +56,39 @@ class AutoplayTests(unittest.TestCase):
 
         self.assertEqual(1, exit_code)
         self.assertIn("verified_won: False", output.getvalue())
+
+    def test_autoplay_save_trace_only_when_solved_and_verified(self):
+        game = two_step_home_game()
+        moves = [Move(MoveType.COL_TO_HOME, 0), Move(MoveType.COL_TO_HOME, 0)]
+        result = SolveResult(True, moves, 2, 2, 1, "won")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}\\trace.json"
+            with patch("autoplay.FreeCellGame", return_value=game), patch(
+                "autoplay.solve", return_value=result
+            ), patch("autoplay.save_trace") as save_trace:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    exit_code = autoplay.main(["--seed", "1", "--save-trace", path])
+
+        self.assertEqual(0, exit_code)
+        save_trace.assert_called_once_with(path, 1, 10000, 200, result)
+
+    def test_autoplay_save_trace_skips_unverified_solution(self):
+        game = two_step_home_game()
+        result = SolveResult(True, [], 1, 0, 0, "won")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}\\trace.json"
+            with patch("autoplay.FreeCellGame", return_value=game), patch(
+                "autoplay.solve", return_value=result
+            ), patch("autoplay.save_trace") as save_trace:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    exit_code = autoplay.main(["--seed", "1", "--save-trace", path])
+
+        self.assertEqual(1, exit_code)
+        save_trace.assert_not_called()
 
 
 if __name__ == "__main__":
