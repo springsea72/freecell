@@ -1,7 +1,7 @@
 import heapq
 from dataclasses import dataclass
 from itertools import count
-from typing import List
+from typing import List, Optional
 
 from game_model import FreeCellGame, Move, MoveType
 
@@ -16,6 +16,14 @@ class SolveResult:
     reason: str
 
 
+@dataclass
+class _SearchNode:
+    game: FreeCellGame
+    parent_idx: Optional[int]
+    move: Optional[Move]
+    depth: int
+
+
 def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
     start = game.clone()
 
@@ -27,8 +35,10 @@ def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
 
     frontier = []
     sequence = count()
-    seen = {start.state_key()}
-    heapq.heappush(frontier, (_state_score(start, 0), 0, next(sequence), start, []))
+    start_key = start.state_key()
+    seen = {start_key}
+    nodes = [_SearchNode(start, None, None, 0)]
+    heapq.heappush(frontier, (_state_score(start_key, 0), 0, next(sequence), 0))
 
     explored_nodes = 0
     generated_nodes = 0
@@ -37,17 +47,34 @@ def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
     reached_depth_limit = False
 
     while frontier:
-        _, depth, _, current, path = heapq.heappop(frontier)
+        _, _, _, node_idx = heapq.heappop(frontier)
+        node = nodes[node_idx]
+        current = node.game
         explored_nodes += 1
 
         if current.is_won():
-            return SolveResult(True, path, explored_nodes, generated_nodes, max_frontier, "won")
+            return SolveResult(
+                True,
+                _rebuild_path(nodes, node_idx),
+                explored_nodes,
+                generated_nodes,
+                max_frontier,
+                "won",
+            )
 
-        if depth >= max_depth:
+        if node.depth >= max_depth:
             reached_depth_limit = True
             continue
 
+        if len(nodes) >= max_nodes:
+            reached_node_limit = True
+            continue
+
         for move in _ordered_moves(current.generate_legal_moves()):
+            if len(nodes) >= max_nodes:
+                reached_node_limit = True
+                break
+
             child = current.clone()
             if not child.apply_move(move):
                 continue
@@ -56,18 +83,16 @@ def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
             if key in seen:
                 continue
 
-            if generated_nodes + 1 >= max_nodes:
-                reached_node_limit = True
-                continue
-
             seen.add(key)
             generated_nodes += 1
-            child_path = path + [move]
+            child_idx = len(nodes)
+            child_depth = node.depth + 1
+            nodes.append(_SearchNode(child, node_idx, move, child_depth))
 
             if child.is_won():
                 return SolveResult(
                     True,
-                    child_path,
+                    _rebuild_path(nodes, child_idx),
                     explored_nodes,
                     generated_nodes,
                     max_frontier,
@@ -76,7 +101,7 @@ def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
 
             heapq.heappush(
                 frontier,
-                (_state_score(child, len(child_path)), len(child_path), next(sequence), child, child_path),
+                (_state_score(key, child_depth), child_depth, next(sequence), child_idx),
             )
             max_frontier = max(max_frontier, len(frontier))
 
@@ -89,24 +114,38 @@ def solve(game: FreeCellGame, max_nodes=50000, max_depth=200) -> SolveResult:
     return SolveResult(False, [], explored_nodes, generated_nodes, max_frontier, reason)
 
 
+def _rebuild_path(nodes: List[_SearchNode], node_idx: int) -> List[Move]:
+    moves = []
+    while node_idx is not None:
+        node = nodes[node_idx]
+        if node.move is not None:
+            moves.append(node.move)
+        node_idx = node.parent_idx
+    moves.reverse()
+    return moves
+
+
 def _ordered_moves(moves: List[Move]) -> List[Move]:
     return sorted(moves, key=_move_priority)
 
 
 def _move_priority(move: Move):
-    if move.move_type in (MoveType.COL_TO_HOME, MoveType.FREE_TO_HOME):
+    if move.move_type == MoveType.FREE_TO_HOME:
         group = 0
-    elif move.move_type == MoveType.FREE_TO_COL:
+    elif move.move_type == MoveType.COL_TO_HOME:
         group = 1
-    elif move.move_type == MoveType.COL_TO_COL:
+    elif move.move_type == MoveType.FREE_TO_COL:
         group = 2
-    else:
+    elif move.move_type == MoveType.COL_TO_COL:
         group = 3
+    else:
+        group = 4
     return (group, -move.count, move.from_idx, -1 if move.to_idx is None else move.to_idx)
 
 
-def _state_score(game: FreeCellGame, depth: int):
-    home_cards = sum(len(stack) for stack in game.home_cells.values())
-    free_used = sum(1 for cell in game.free_cells if cell is not None)
-    empty_columns = sum(1 for column in game.columns if not column)
+def _state_score(state_key, depth: int):
+    columns_key, free_cells_key, home_cells_key = state_key
+    home_cards = sum(len(stack) for stack in home_cells_key)
+    free_used = sum(1 for cell in free_cells_key if cell is not None)
+    empty_columns = sum(1 for column in columns_key if not column)
     return (52 - home_cards, free_used, -empty_columns, depth)

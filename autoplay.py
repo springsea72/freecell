@@ -11,13 +11,21 @@ def configure_console_encoding():
             stream.reconfigure(encoding="utf-8")
 
 
-def main():
+def verify_solution(game, moves):
+    verification = game.clone()
+    for move in moves:
+        if not verification.apply_move(move):
+            return False
+    return verification.is_won()
+
+
+def main(argv=None):
     configure_console_encoding()
     parser = argparse.ArgumentParser(description="Run an offline FreeCell search.")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-nodes", type=int, default=10000)
     parser.add_argument("--max-depth", type=int, default=200)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     game = FreeCellGame(seed=args.seed)
     result = solve(game, max_nodes=args.max_nodes, max_depth=args.max_depth)
@@ -30,15 +38,15 @@ def main():
     print(f"reason: {result.reason}")
 
     if result.solved:
-        verification = game.clone()
-        valid_path = True
         for index, move in enumerate(result.moves, start=1):
             print(f"{index}: {move}")
-            if not verification.apply_move(move):
-                valid_path = False
-                break
-        print(f"verified_won: {valid_path and verification.is_won()}")
+        verified_won = verify_solution(game, result.moves)
+        print(f"verified_won: {verified_won}")
+        if not verified_won:
+            return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

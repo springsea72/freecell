@@ -1,6 +1,6 @@
 import unittest
 
-from game_model import Card, FreeCellGame, Suit
+from game_model import Card, FreeCellGame, Move, MoveType, Suit
 from solver import SolveResult, solve
 
 
@@ -60,6 +60,15 @@ class SolverTests(unittest.TestCase):
         for move in result.moves:
             self.assertTrue(clone.apply_move(move), msg=str(move))
         self.assertTrue(clone.is_won())
+
+    def test_solver_parent_pointer_preserves_move_order(self):
+        result = solve(two_step_home_game(), max_nodes=20, max_depth=5)
+
+        self.assertTrue(result.solved)
+        self.assertEqual(
+            [Move(MoveType.COL_TO_HOME, 0), Move(MoveType.COL_TO_HOME, 0)],
+            result.moves,
+        )
 
     def test_solver_node_limit_returns_clear_failure(self):
         result = solve(two_step_home_game(), max_nodes=1, max_depth=5)
