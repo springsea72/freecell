@@ -1,6 +1,15 @@
-from game_model import FreeCellGame, MoveType, Move
+import sys
+
+from game_model import FreeCellGame
+
+
+def configure_console_encoding():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 def main():
+    configure_console_encoding()
     game = FreeCellGame()
 
     while True:
@@ -28,29 +37,12 @@ def main():
                 continue
 
             move = moves[move_idx]
-            success = apply_move(game, move)
+            success = game.apply_move(move)
             if not success:
                 print("执行失败，可能是非法状态。")
 
         except Exception as e:
             print("发生错误：", e)
-
-
-def apply_move(game: FreeCellGame, move: Move) -> bool:
-    t = move.move_type
-    f = move.from_idx
-    t_ = move.to_idx
-
-    if t == MoveType.COL_TO_COL:
-        return game.move_card_between_columns(f, t_)
-    elif t == MoveType.COL_TO_FREE:
-        return game.move_card_to_free_cell(f)
-    elif t == MoveType.FREE_TO_COL:
-        return game.move_card_from_free_cell(f, t_)
-    elif t == MoveType.COL_TO_HOME:
-        return game.move_card_to_home(f)
-    return False
-
 
 if __name__ == "__main__":
     main()

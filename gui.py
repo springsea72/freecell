@@ -98,19 +98,6 @@ class GameGUI:
         self.card_widgets[card] = (rect, text)
 
 
-    def get_valid_sequence_from_column(self, column: list[Card], start_idx: int) -> list[Card]:
-        """
-        从某列的某个位置开始，获取从该牌到底部连续合法的递减颜色交错序列
-        """
-        sequence = column[start_idx:]
-        for i in range(len(sequence) - 1):
-            upper = sequence[i]
-            lower = sequence[i + 1]
-            if upper.color() == lower.color() or upper.value != lower.value + 1:
-                return sequence[:i + 1]
-        return sequence  # 全部合法
-
-
     def on_click(self, event):
         self.selected_card = None
         self.selected_sequence = None
@@ -124,7 +111,7 @@ class GameGUI:
                 card = column[row_idx]
                 y = START_Y + row_idx * 27
                 if x <= event.x <= x + CARD_WIDTH and y <= event.y <= y + CARD_HEIGHT:
-                    sequence = self.get_valid_sequence_from_column(column, row_idx)
+                    sequence = self.game.get_valid_sequence_from_column(col_idx, row_idx)
 
                     # 情况 1：该牌是列的最后一张（单牌），允许拖动
                     if row_idx == len(column) - 1:
@@ -175,9 +162,14 @@ class GameGUI:
 
 
     def get_max_movable_sequence_length(self):
-        empty_free_cells = sum(1 for cell in self.game.free_cells if cell is None)
-        empty_columns = sum(1 for col in self.game.columns if not col)
-        return (empty_free_cells + 1) * (2 ** empty_columns)
+        return self.game.max_movable_sequence_length()
+
+    def apply_gui_move(self, move: Move) -> bool:
+        snapshot = self.game.clone()
+        if self.game.apply_move(move):
+            self.history.append(snapshot)
+            return True
+        return False
 
 
     def on_release(self, event):
@@ -187,69 +179,35 @@ class GameGUI:
         drop_x, drop_y = event.x, event.y
         moved = False
 
-        # 整列拖动（多张牌）
-        if len(self.selected_sequence) >= 2:
-            to_col_idx = self.get_column_index_at(drop_x, drop_y)
-            from_col = self.game.columns[self.selected_col_idx]
+        from_col_idx = self.selected_col_idx
+        from_free_idx = self.find_card_in_free_cells(self.selected_card)
+        to_col_idx = self.get_column_index_at(drop_x, drop_y)
 
-            if to_col_idx is not None and to_col_idx != self.selected_col_idx:
-                target_col = self.game.columns[to_col_idx]
-                top_card = self.selected_sequence[0]
+        if from_col_idx is not None:
+            if to_col_idx is not None:
+                moved = self.apply_gui_move(
+                    Move(
+                        MoveType.COL_TO_COL,
+                        from_col_idx,
+                        to_col_idx,
+                        count=len(self.selected_sequence),
+                    )
+                )
 
-                # 1. 目标列是否合法接入
-                if self.game.can_move_to_column(top_card, target_col):
+            if not moved and len(self.selected_sequence) == 1:
+                free_idx = self.get_free_cell_index_at(drop_x, drop_y)
+                if free_idx is not None:
+                    moved = self.apply_gui_move(Move(MoveType.COL_TO_FREE, from_col_idx, free_idx))
 
-                    # 2. 是否超过最大可移动长度
-                    max_len = self.get_max_movable_sequence_length()
-                    if len(self.selected_sequence) <= max_len:
-                        self.history.append(self.game.clone())
-                        # 移动所有选中的牌
-                        for card in self.selected_sequence:
-                            from_col.remove(card)
-                            target_col.append(card)
-                        moved = True
+            if not moved and len(self.selected_sequence) == 1 and self.is_home_cell_area(drop_x, drop_y):
+                moved = self.apply_gui_move(Move(MoveType.COL_TO_HOME, from_col_idx))
 
-            if not moved:
-                # 回到原位（直接刷新画面）
-                self.render()
-                self.selected_card = None
-                self.selected_sequence = None
-                return
+        elif from_free_idx is not None and len(self.selected_sequence) == 1:
+            if to_col_idx is not None:
+                moved = self.apply_gui_move(Move(MoveType.FREE_TO_COL, from_free_idx, to_col_idx))
 
-        # 单张牌逻辑（保持原样）
-        else:
-            from_col_idx = self.find_card_column(self.selected_card)
-            if from_col_idx != -1:
-                to_col_idx = self.get_column_index_at(drop_x, drop_y)
-                if to_col_idx is not None and to_col_idx != from_col_idx:
-                    if self.game.can_move_to_column(self.selected_card, self.game.columns[to_col_idx]):
-                        self.history.append(self.game.clone())
-                        self.game.columns[to_col_idx].append(self.game.columns[from_col_idx].pop())
-                        moved = True
-
-                if not moved:
-                    free_idx = self.get_free_cell_index_at(drop_x, drop_y)
-                    if free_idx is not None and self.game.free_cells[free_idx] is None:
-                        self.history.append(self.game.clone())
-                        self.game.free_cells[free_idx] = self.game.columns[from_col_idx].pop()
-                        moved = True
-
-                if not moved:
-                    if self.is_home_cell_area(drop_x, drop_y):
-                        if self.game.can_move_to_home(self.selected_card):
-                            self.history.append(self.game.clone())
-                            self.game.home_cells[self.selected_card.suit].append(self.game.columns[from_col_idx].pop())
-                            moved = True
-
-            else:
-                from_free_idx = self.find_card_in_free_cells(self.selected_card)
-                to_col_idx = self.get_column_index_at(drop_x, drop_y)
-                if from_free_idx is not None and to_col_idx is not None:
-                    if self.game.can_move_to_column(self.selected_card, self.game.columns[to_col_idx]):
-                        self.history.append(self.game.clone())
-                        self.game.columns[to_col_idx].append(self.selected_card)
-                        self.game.free_cells[from_free_idx] = None
-                        moved = True
+            if not moved and self.is_home_cell_area(drop_x, drop_y):
+                moved = self.apply_gui_move(Move(MoveType.FREE_TO_HOME, from_free_idx))
 
         self.selected_card = None
         self.selected_sequence = None
@@ -288,25 +246,7 @@ class GameGUI:
         return None
 
     def auto_move_to_home(self):
-        moved = True
-        while moved:
-            moved = False
-
-            # 检查每列的顶部牌
-            for i, column in enumerate(self.game.columns):
-                if column:
-                    top_card = column[-1]
-                    if self.game.can_move_to_home(top_card):
-                        self.game.home_cells[top_card.suit].append(column.pop())
-                        moved = True
-
-            # 检查空当位的牌
-            for i, card in enumerate(self.game.free_cells):
-                if card and self.game.can_move_to_home(card):
-                    self.game.home_cells[card.suit].append(card)
-                    self.game.free_cells[i] = None
-                    moved = True
-
+        self.game.auto_move_to_home()
         self.render()
 
     def on_right_click(self, event):
@@ -320,8 +260,7 @@ class GameGUI:
 
 
     def check_victory(self):
-        total_home_cards = sum(len(stack) for stack in self.game.home_cells.values())
-        if total_home_cards == 52:
+        if self.game.is_won():
             self.victory = True
             self.canvas.create_text(
                 500, 300,
