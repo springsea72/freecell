@@ -1,4 +1,6 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 
 import gui
 from game_model import Card, FreeCellGame, Move, MoveType, Suit
@@ -157,6 +159,51 @@ class GuiAutoplayTests(unittest.TestCase):
         app.root.run(app.playback_after_id)
 
         self.assertEqual([move], calls)
+
+    def test_undo_during_playback_stops_playback_and_invalidates_callback(self):
+        app = make_app(two_move_game())
+        first_move = Move(MoveType.COL_TO_HOME, 0)
+        second_move = Move(MoveType.COL_TO_HOME, 0)
+
+        app.start_playback([first_move, second_move])
+        app.root.run(app.playback_after_id)
+        stale_after_id = app.playback_after_id
+
+        self.assertEqual([card(Suit.SPADES, 1)], app.game.home_cells[Suit.SPADES])
+        self.assertEqual(1, app.playback_index)
+
+        app.undo()
+        app.root.run(stale_after_id)
+
+        self.assertEqual([card(Suit.SPADES, 2), card(Suit.SPADES, 1)], app.game.columns[0])
+        self.assertEqual([], app.game.home_cells[Suit.SPADES])
+        self.assertFalse(app.playback_running)
+        self.assertFalse(app.playback_paused)
+        self.assertFalse(app.solve_running)
+        self.assertEqual([], app.playback_moves)
+        self.assertEqual(0, app.playback_index)
+        self.assertEqual([], app.history)
+
+    def test_undo_during_solve_stops_pending_solve_result(self):
+        app = make_app(one_move_game())
+        app.solve_running = True
+        token = app.playback_generation
+        before = app.game.state_key()
+
+        with redirect_stdout(io.StringIO()):
+            app.undo()
+        app.on_solve_finished(
+            SolveResult(True, [Move(MoveType.COL_TO_HOME, 0)], 1, 1, 1, "won"),
+            token,
+        )
+
+        self.assertFalse(app.solve_running)
+        self.assertFalse(app.playback_running)
+        self.assertFalse(app.playback_paused)
+        self.assertEqual([], app.playback_moves)
+        self.assertEqual(0, app.playback_index)
+        self.assertEqual(before, app.game.state_key())
+        self.assertEqual([], app.history)
 
 
 if __name__ == "__main__":

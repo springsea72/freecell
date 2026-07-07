@@ -481,12 +481,20 @@ class GameGUI:
 
 
     def undo(self, event=None):
+        stopped_autoplay = self.is_autoplay_active()
+        if stopped_autoplay:
+            self.stop_playback()
+
         if self.history:
             self.game = self.history.pop()
             self.selected_card = None
             self.render()
+            if stopped_autoplay:
+                self.set_status("已撤销，播放已停止")
         else:
-            print("⚠️ 没有可撤销的历史操作")
+            if stopped_autoplay:
+                self.set_status("播放已停止，无可撤销")
+            print("没有可撤销的历史操作")
 
 
 
