@@ -1,6 +1,8 @@
 # gui.py
+import threading
 import tkinter as tk
 from game_model import FreeCellGame, Card, Move, MoveType
+from solver import solve
 from tkinter import messagebox
 
 
@@ -10,6 +12,9 @@ SPACING_X = 80
 SPACING_Y = 30
 START_Y = 100
 BG_COLOR = "#357960"
+GUI_SOLVE_MAX_NODES = 5000
+GUI_SOLVE_MAX_DEPTH = 200
+PLAYBACK_INTERVAL_MS = 200
 
 class GameGUI:
     def __init__(self, root):
@@ -35,6 +40,26 @@ class GameGUI:
         self.start_pos = None
         self.victory = False  # 是否胜利标志
         self.history = []
+        self.playback_moves = []
+        self.playback_index = 0
+        self.playback_running = False
+        self.playback_paused = False
+        self.solve_running = False
+        self.playback_after_id = None
+        self.playback_generation = 0
+        self.status_var = tk.StringVar(value="空闲")
+
+        self.playback_controls_frame = tk.Frame(self.root)
+        self.playback_controls_frame.pack(pady=4)
+        self.solve_button = tk.Button(self.playback_controls_frame, text="求解播放", command=self.solve_and_play)
+        self.solve_button.pack(side=tk.LEFT, padx=4)
+        self.pause_button = tk.Button(self.playback_controls_frame, text="暂停/继续", command=self.toggle_playback_pause)
+        self.pause_button.pack(side=tk.LEFT, padx=4)
+        self.stop_button = tk.Button(self.playback_controls_frame, text="停止播放", command=self.stop_playback)
+        self.stop_button.pack(side=tk.LEFT, padx=4)
+        self.status_label = tk.Label(self.root, textvariable=self.status_var)
+        self.status_label.pack()
+        self.update_playback_controls()
 
         # 绑定鼠标和键盘事件
         self.canvas.bind("<Button-1>", self.on_click)
@@ -46,6 +71,175 @@ class GameGUI:
         self.render()
 
 
+
+
+    def set_status(self, text):
+        if hasattr(self, "status_var"):
+            self.status_var.set(text)
+
+    def is_autoplay_active(self):
+        return self.solve_running or self.playback_running
+
+    def update_playback_controls(self):
+        if hasattr(self, "solve_button"):
+            self.solve_button.config(state=tk.DISABLED if self.is_autoplay_active() else tk.NORMAL)
+        if hasattr(self, "pause_button"):
+            self.pause_button.config(state=tk.NORMAL if self.playback_running else tk.DISABLED)
+        if hasattr(self, "stop_button"):
+            self.stop_button.config(state=tk.NORMAL if self.is_autoplay_active() else tk.DISABLED)
+
+    def solve_and_play(self):
+        if self.is_autoplay_active():
+            return
+
+        game_snapshot = self.game.clone()
+        self.solve_running = True
+        self.playback_generation += 1
+        token = self.playback_generation
+        self.set_status("求解中...")
+        self.update_playback_controls()
+
+        thread = threading.Thread(
+            target=self._solve_worker,
+            args=(game_snapshot, token),
+            daemon=True,
+        )
+        thread.start()
+
+    def _solve_worker(self, game_snapshot, token):
+        try:
+            result = solve(
+                game_snapshot,
+                max_nodes=GUI_SOLVE_MAX_NODES,
+                max_depth=GUI_SOLVE_MAX_DEPTH,
+            )
+        except Exception as exc:
+            message = str(exc)
+            self.root.after(0, lambda: self.on_solve_error(message, token))
+            return
+
+        self.root.after(0, lambda: self.on_solve_finished(result, token))
+
+    def on_solve_error(self, message, token):
+        if token != self.playback_generation:
+            return
+        self.solve_running = False
+        self.set_status(f"求解失败：{message}")
+        self.update_playback_controls()
+
+    def on_solve_finished(self, result, token):
+        if token != self.playback_generation:
+            return
+
+        self.solve_running = False
+        if result.solved:
+            self.set_status(f"已找到解法：{len(result.moves)} 步")
+            self.start_playback(result.moves)
+        else:
+            self.set_status(f"未找到解法：{result.reason}")
+            self.update_playback_controls()
+
+    def start_playback(self, moves):
+        self.cancel_playback_after()
+        self.playback_generation += 1
+        self.playback_moves = list(moves)
+        self.playback_index = 0
+        self.playback_paused = False
+
+        if not self.playback_moves:
+            self.playback_running = False
+            self.set_status("播放完成")
+            self.update_playback_controls()
+            return
+
+        self.playback_running = True
+        self.set_status(f"播放中：0/{len(self.playback_moves)}")
+        self.update_playback_controls()
+        self.schedule_next_playback_step(self.playback_generation)
+
+    def schedule_next_playback_step(self, token=None):
+        if token is None:
+            token = self.playback_generation
+        if not self.playback_running or self.playback_paused:
+            return
+        self.cancel_playback_after()
+        self.playback_after_id = self.root.after(
+            PLAYBACK_INTERVAL_MS,
+            lambda: self.playback_step(token),
+        )
+
+    def cancel_playback_after(self):
+        if self.playback_after_id is None:
+            return
+        try:
+            self.root.after_cancel(self.playback_after_id)
+        except Exception:
+            pass
+        self.playback_after_id = None
+
+    def playback_step(self, token=None):
+        if token is None:
+            token = self.playback_generation
+        self.playback_after_id = None
+        if token != self.playback_generation or not self.playback_running or self.playback_paused:
+            return
+
+        total = len(self.playback_moves)
+        if self.playback_index >= total:
+            self.finish_playback()
+            return
+
+        move = self.playback_moves[self.playback_index]
+        snapshot = self.game.clone()
+        if not self.game.apply_move(move):
+            self.playback_running = False
+            self.playback_paused = False
+            self.set_status(f"播放失败：{self.playback_index + 1}/{total}")
+            self.update_playback_controls()
+            return
+
+        self.history.append(snapshot)
+        self.playback_index += 1
+        self.render()
+        self.check_victory()
+
+        if self.playback_index >= total:
+            self.finish_playback()
+        else:
+            self.set_status(f"播放中：{self.playback_index}/{total}")
+            self.schedule_next_playback_step(token)
+
+    def finish_playback(self):
+        self.playback_running = False
+        self.playback_paused = False
+        self.playback_after_id = None
+        self.set_status("播放完成")
+        self.update_playback_controls()
+
+    def toggle_playback_pause(self):
+        if not self.playback_running:
+            return
+        if self.playback_paused:
+            self.playback_paused = False
+            self.set_status(f"播放中：{self.playback_index}/{len(self.playback_moves)}")
+            self.schedule_next_playback_step(self.playback_generation)
+        else:
+            self.playback_paused = True
+            self.cancel_playback_after()
+            self.set_status("已暂停")
+        self.update_playback_controls()
+
+    def stop_playback(self):
+        if self.playback_after_id is not None:
+            self.cancel_playback_after()
+        self.playback_generation += 1
+        self.solve_running = False
+        self.playback_running = False
+        self.playback_paused = False
+        self.playback_moves = []
+        self.playback_index = 0
+        self.set_status("空闲")
+        self.update_playback_controls()
 
 
     def render(self):
@@ -279,6 +473,7 @@ class GameGUI:
                 return  # 用户选择否，取消重开
 
         self.victory = False  # 重置胜利状态
+        self.stop_playback()
         self.history.clear()
         self.game = FreeCellGame()
         self.selected_card = None
