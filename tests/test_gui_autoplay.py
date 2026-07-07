@@ -1,6 +1,7 @@
 import io
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 import gui
 from game_model import Card, FreeCellGame, Move, MoveType, Suit
@@ -77,6 +78,15 @@ def make_app(game):
     app = gui.GameGUI.__new__(gui.GameGUI)
     app.root = FakeRoot()
     app.game = game
+    app.current_seed = 1
+    app.initial_state_key = game.state_key()
+    app.last_solve_result = None
+    app.last_solve_seed = None
+    app.last_solve_max_nodes = None
+    app.last_solve_max_depth = None
+    app.last_solve_trace_verified = False
+    app.pending_solve_seed = 1
+    app.pending_solve_start_key = game.state_key()
     app.history = []
     app.playback_moves = []
     app.playback_index = 0
@@ -90,6 +100,8 @@ def make_app(game):
     app.solve_button = FakeButton()
     app.pause_button = FakeButton()
     app.stop_button = FakeButton()
+    app.save_trace_button = FakeButton()
+    app.load_trace_button = FakeButton()
     app.render_calls = 0
     app.victory_checks = 0
 
@@ -301,6 +313,93 @@ class GuiAutoplayTests(unittest.TestCase):
         finished.on_right_click(FakeEvent())
 
         self.assertEqual([card(Suit.SPADES, 1)], finished.game.home_cells[Suit.SPADES])
+
+    def test_save_trace_without_reproducible_result_does_not_save(self):
+        app = make_app(one_move_game())
+
+        with patch("gui.filedialog.asksaveasfilename") as ask_path, patch("gui.save_trace") as save:
+            self.assertFalse(app.save_current_trace())
+
+        ask_path.assert_not_called()
+        save.assert_not_called()
+        self.assertIn("无法保存", app.status_var.get())
+
+    def test_save_trace_with_verified_result_calls_save_trace(self):
+        app = make_app(one_move_game())
+        result = SolveResult(True, [Move(MoveType.COL_TO_HOME, 0)], 3, 4, 5, "won")
+        app.last_solve_result = result
+        app.last_solve_seed = 123
+        app.last_solve_max_nodes = 5000
+        app.last_solve_max_depth = 200
+        app.last_solve_trace_verified = True
+
+        with patch("gui.filedialog.asksaveasfilename", return_value="trace.json"), patch(
+            "gui.save_trace"
+        ) as save:
+            self.assertTrue(app.save_current_trace())
+
+        save.assert_called_once_with("trace.json", 123, 5000, 200, result)
+
+    def test_load_invalid_trace_does_not_change_game(self):
+        app = make_app(one_move_game())
+        before = app.game.state_key()
+        started = []
+        app.start_playback = lambda moves: started.append(moves)
+
+        with patch("gui.load_trace", return_value={"seed": 1}), patch(
+            "gui.verify_trace", return_value=False
+        ), patch("gui.messagebox.showerror"):
+            self.assertFalse(app.load_trace_file("bad.json"))
+
+        self.assertEqual(before, app.game.state_key())
+        self.assertEqual([], started)
+        self.assertIn("验证失败", app.status_var.get())
+
+    def test_load_valid_trace_rebuilds_seed_game_and_starts_playback(self):
+        app = make_app(one_move_game())
+        trace = {"seed": 123, "moves": [{"move_type": "COL_TO_HOME", "from_idx": 0, "count": 1}]}
+        moves = [Move(MoveType.COL_TO_HOME, 0)]
+        rebuilt = FreeCellGame(seed=123)
+        started = []
+        original_start_playback = app.start_playback
+
+        def spy_start_playback(path):
+            started.append(list(path))
+            original_start_playback(path)
+
+        app.start_playback = spy_start_playback
+
+        with patch("gui.load_trace", return_value=trace), patch(
+            "gui.verify_trace", return_value=True
+        ), patch("gui.moves_from_trace", return_value=moves), patch(
+            "gui.FreeCellGame", return_value=rebuilt
+        ) as game_class:
+            self.assertTrue(app.load_trace_file("good.json"))
+
+        game_class.assert_called_once_with(seed=123)
+        self.assertIs(app.game, rebuilt)
+        self.assertEqual(123, app.current_seed)
+        self.assertEqual([moves], started)
+        self.assertIn("seed=123", app.status_var.get())
+        self.assertIn("path length=1", app.status_var.get())
+
+    def test_loading_trace_does_not_apply_moves_directly(self):
+        app = make_app(one_move_game())
+        trace = {"seed": 123, "moves": [{"move_type": "COL_TO_HOME", "from_idx": 0, "count": 1}]}
+        moves = [Move(MoveType.COL_TO_HOME, 0)]
+        rebuilt = FreeCellGame(seed=123)
+        before_loaded_playback = rebuilt.state_key()
+
+        with patch("gui.load_trace", return_value=trace), patch(
+            "gui.verify_trace", return_value=True
+        ), patch("gui.moves_from_trace", return_value=moves), patch(
+            "gui.FreeCellGame", return_value=rebuilt
+        ):
+            self.assertTrue(app.load_trace_file("good.json"))
+
+        self.assertEqual(before_loaded_playback, app.game.state_key())
+        self.assertEqual(0, app.playback_index)
+        self.assertTrue(app.playback_running)
 
 
 if __name__ == "__main__":

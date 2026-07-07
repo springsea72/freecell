@@ -1,9 +1,11 @@
 # gui.py
+import random
 import threading
 import tkinter as tk
 from game_model import FreeCellGame, Card, Move, MoveType
 from solver import solve
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
+from trace_io import load_trace, moves_from_trace, save_trace, verify_trace
 
 
 CARD_WIDTH = 60
@@ -34,7 +36,16 @@ class GameGUI:
         self.restart_button.pack(pady=10)
 
         # 初始化游戏逻辑和界面状态
-        self.game = FreeCellGame()
+        self.current_seed = self.new_game_seed()
+        self.game = FreeCellGame(seed=self.current_seed)
+        self.initial_state_key = self.game.state_key()
+        self.last_solve_result = None
+        self.last_solve_seed = None
+        self.last_solve_max_nodes = None
+        self.last_solve_max_depth = None
+        self.last_solve_trace_verified = False
+        self.pending_solve_seed = None
+        self.pending_solve_start_key = None
         self.card_widgets = {}  # Card对象 → Canvas对象
         self.selected_card = None
         self.start_pos = None
@@ -58,6 +69,10 @@ class GameGUI:
         self.pause_button.pack(side=tk.LEFT, padx=4)
         self.stop_button = tk.Button(self.playback_controls_frame, text="停止播放", command=self.stop_playback)
         self.stop_button.pack(side=tk.LEFT, padx=4)
+        self.save_trace_button = tk.Button(self.playback_controls_frame, text="保存 trace", command=self.save_current_trace)
+        self.save_trace_button.pack(side=tk.LEFT, padx=4)
+        self.load_trace_button = tk.Button(self.playback_controls_frame, text="加载 trace 播放", command=self.load_trace_and_play)
+        self.load_trace_button.pack(side=tk.LEFT, padx=4)
         self.status_label = tk.Label(self.root, textvariable=self.status_var)
         self.status_label.pack()
         self.params_label = tk.Label(
@@ -87,6 +102,113 @@ class GameGUI:
         self.render()
 
 
+
+
+    def new_game_seed(self):
+        return random.randrange(1, 2**31)
+
+    def clear_saved_solve(self):
+        self.last_solve_result = None
+        self.last_solve_seed = None
+        self.last_solve_max_nodes = None
+        self.last_solve_max_depth = None
+        self.last_solve_trace_verified = False
+
+    def verify_result_from_seed(self, result, seed):
+        if seed is None or result is None or not result.solved:
+            return False
+        game = FreeCellGame(seed=seed)
+        for move in result.moves:
+            if not game.apply_move(move):
+                return False
+        return game.is_won()
+
+    def can_save_current_trace(self):
+        return (
+            getattr(self, "last_solve_result", None) is not None
+            and self.last_solve_result.solved
+            and getattr(self, "last_solve_seed", None) is not None
+            and getattr(self, "last_solve_max_nodes", None) is not None
+            and getattr(self, "last_solve_max_depth", None) is not None
+            and getattr(self, "last_solve_trace_verified", False)
+        )
+
+    def save_current_trace(self):
+        if not self.can_save_current_trace():
+            self.set_status("当前牌局缺少可复现解法，无法保存 trace")
+            return False
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON trace", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return False
+
+        try:
+            save_trace(
+                path,
+                self.last_solve_seed,
+                self.last_solve_max_nodes,
+                self.last_solve_max_depth,
+                self.last_solve_result,
+            )
+        except Exception as exc:
+            self.set_status(f"保存 trace 失败：{exc}")
+            messagebox.showerror("保存 trace 失败", str(exc))
+            return False
+
+        self.set_status(f"trace 已保存：{path}")
+        self.update_playback_controls()
+        return True
+
+    def load_trace_and_play(self):
+        if self.is_autoplay_active():
+            self.set_status("自动求解/播放中，无法加载 trace")
+            return False
+
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON trace", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return False
+        return self.load_trace_file(path)
+
+    def load_trace_file(self, path):
+        try:
+            trace = load_trace(path)
+        except Exception as exc:
+            self.set_status(f"加载 trace 失败：{exc}")
+            messagebox.showerror("加载 trace 失败", str(exc))
+            return False
+
+        if not verify_trace(trace):
+            self.set_status("trace 验证失败，未修改当前牌局")
+            messagebox.showerror("加载 trace 失败", "trace 验证失败")
+            return False
+
+        try:
+            seed = trace["seed"]
+            moves = moves_from_trace(trace)
+        except Exception as exc:
+            self.set_status(f"trace 解析失败：{exc}")
+            messagebox.showerror("加载 trace 失败", str(exc))
+            return False
+
+        self.stop_playback()
+        self.game = FreeCellGame(seed=seed)
+        self.current_seed = seed
+        self.initial_state_key = self.game.state_key()
+        self.clear_saved_solve()
+        self.history.clear()
+        self.selected_card = None
+        self.selected_sequence = None
+        self.selected_col_idx = None
+        self.victory = False
+        self.render()
+        self.start_playback(moves)
+        self.set_status(f"已加载 trace：seed={seed}，path length={len(moves)}")
+        return True
 
 
     def set_status(self, text):
@@ -133,6 +255,10 @@ class GameGUI:
             self.pause_button.config(state=tk.NORMAL if self.playback_running else tk.DISABLED)
         if hasattr(self, "stop_button"):
             self.stop_button.config(state=tk.NORMAL if self.is_autoplay_active() else tk.DISABLED)
+        if hasattr(self, "save_trace_button"):
+            self.save_trace_button.config(state=tk.NORMAL if self.can_save_current_trace() else tk.DISABLED)
+        if hasattr(self, "load_trace_button"):
+            self.load_trace_button.config(state=tk.DISABLED if self.is_autoplay_active() else tk.NORMAL)
 
     def solve_and_play(self):
         if self.is_autoplay_active():
@@ -140,6 +266,9 @@ class GameGUI:
 
         game_snapshot = self.game.clone()
         self.solve_running = True
+        self.clear_saved_solve()
+        self.pending_solve_seed = self.current_seed
+        self.pending_solve_start_key = game_snapshot.state_key()
         self.playback_generation += 1
         token = self.playback_generation
         self.set_status("求解中...")
@@ -179,6 +308,19 @@ class GameGUI:
 
         self.solve_running = False
         status = self.format_solve_result_status(result)
+        if result.solved:
+            self.last_solve_result = result
+            self.last_solve_seed = self.pending_solve_seed
+            self.last_solve_max_nodes = GUI_SOLVE_MAX_NODES
+            self.last_solve_max_depth = GUI_SOLVE_MAX_DEPTH
+            if self.pending_solve_start_key == self.initial_state_key:
+                self.last_solve_trace_verified = self.verify_result_from_seed(
+                    result,
+                    self.last_solve_seed,
+                )
+            else:
+                self.last_solve_trace_verified = False
+
         if result.solved:
             self.start_playback(result.moves)
             self.set_status(status)
@@ -534,9 +676,13 @@ class GameGUI:
         self.victory = False  # 重置胜利状态
         self.stop_playback()
         self.history.clear()
-        self.game = FreeCellGame()
+        self.clear_saved_solve()
+        self.current_seed = self.new_game_seed()
+        self.game = FreeCellGame(seed=self.current_seed)
+        self.initial_state_key = self.game.state_key()
         self.selected_card = None
         self.render()
+        self.update_playback_controls()
 
 
     def undo(self, event=None):
