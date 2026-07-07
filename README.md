@@ -20,6 +20,7 @@
 - 已解牌局可以导出为 JSON trace，并通过 `replay.py` 复现校验。
 - `dataset_builder.py` 可以把已解 trace 转换为 JSONL 策略学习样本。
 - `policy_baseline.py` 可以在 JSONL 数据集上评估简单策略基线。
+- `policy_player.py` 可以让简单策略直接游玩并统计胜率、步数和归堆进度。
 - 使用标准库 `unittest` 覆盖核心规则、求解器、自动游玩入口和基准评估工具。
 
 ## 环境要求
@@ -96,6 +97,14 @@ python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy firs
 python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy heuristic
 ```
 
+直接评估策略游玩表现：
+
+```powershell
+cd D:\freecell
+python policy_player.py --seed 1 --policy heuristic --max-steps 500
+python policy_player.py --seed-start 1 --seed-count 10 --policy heuristic --max-steps 500
+```
+
 运行测试：
 
 ```powershell
@@ -114,6 +123,7 @@ freecell/
 ├── trace_io.py     # JSON trace 读写与验证
 ├── dataset_builder.py # 从 solved trace 生成 JSONL 样本
 ├── policy_baseline.py # 在 JSONL 样本上评估简单策略基线
+├── policy_player.py # 让策略直接游玩并输出真实表现指标
 ├── benchmark.py    # 批量求解器评估工具
 ├── gui.py          # Tkinter 图形界面和交互逻辑
 ├── main.py         # 命令行游戏入口
@@ -179,6 +189,12 @@ freecell/
 - `first_legal` 总是选择第一个合法动作。
 - `heuristic` 使用手写动作优先级选择动作。
 - 输出样本数、命中数和 accuracy，用于后续模型训练的对照基线。
+
+`policy_player.py` 用于评估策略真实游玩表现：
+
+- 每一步从当前游戏状态生成合法动作，再由策略选择动作并通过模型层执行。
+- 检测重复状态循环，并支持 `max_steps` 上限。
+- 输出胜利数、胜率、平均步数和平均归堆数量。
 
 ## 当前限制和后续方向
 
