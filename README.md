@@ -13,6 +13,7 @@
 - `benchmark.py` 批量评估固定 seed 的求解表现，可输出 text/csv，并可选保存已解 trace。
 - `dataset_builder.py` 将 solved trace 转换成 JSONL 策略学习样本。
 - `policy_baseline.py` 在 JSONL 样本上评估 `first_legal` 和 `heuristic` 基线。
+- `learned_policy_eval.py` 评估已训练 learned policy 的 JSONL action accuracy 和真实游玩表现。
 - `policy_player.py` 让策略直接在 `FreeCellGame(seed=...)` 上游玩，统计胜负、步数和归堆进度。
 - `report.py` 汇总 solver benchmark、JSONL policy baseline accuracy 和 policy player 游玩表现。
 - 测试使用标准库 `unittest`，不需要 pytest。
@@ -94,6 +95,13 @@ python train_policy.py --dataset datasets\freecell_policy.jsonl --output models\
 
 `requirements-ml.txt` 只用于训练/模型实验；普通游戏、solver、benchmark、dataset、report 和 GUI 流程不强制依赖 PyTorch。
 
+评估 learned policy：
+
+```powershell
+python learned_policy_eval.py --model models\policy.pt --dataset datasets\freecell_policy.jsonl --device auto
+python learned_policy_eval.py --model models\policy.pt --seed-start 1 --seed-count 10 --max-steps 500 --device auto
+```
+
 直接评估策略游玩表现：
 
 ```powershell
@@ -126,6 +134,9 @@ freecell/
 ├── benchmark.py           # 批量求解器评估
 ├── dataset_builder.py     # solved trace 转 JSONL 样本
 ├── policy_baseline.py     # JSONL 上的 first_legal / heuristic accuracy
+├── learned_policy.py      # 可选 PyTorch learned policy 模型加载和动作选择
+├── learned_policy_eval.py # learned policy 离线和真实游玩评估
+├── train_policy.py        # 可选 PyTorch 最小 imitation policy 训练 CLI
 ├── policy_player.py       # 策略直接游玩评估
 ├── report.py              # 汇总 solver、policy baseline、policy player 指标
 ├── gui.py                 # Tkinter GUI 和自动求解播放/trace 回放
@@ -139,9 +150,9 @@ freecell/
 
 ## 当前限制
 
-- AI policy 训练方案见 [docs/ai_training_plan.md](docs/ai_training_plan.md)。当前仓库只包含训练前设计，不包含训练脚本、模型文件或强制 ML 依赖。
+- AI policy 方案见 [docs/ai_training_plan.md](docs/ai_training_plan.md)。当前仓库已有最小监督训练和 learned policy 评估闭环，模型产物默认不提交，PyTorch 仍是可选 ML 依赖。
 - solver 是启发式搜索，有节点和深度上限，不保证解出所有牌局。
 - GUI 自动播放只接入 solver 路径和 solved trace 回放，未接入 policy player。
-- AI 训练、神经网络和策略模型尚未实现。
-- JSONL 数据集构建和 policy baseline 只是后续训练的基础设施，不执行训练。
+- 强化学习、自对弈、大规模训练和 GUI 模型播放尚未实现。
+- JSONL 数据集构建和 policy baseline 是训练输入与对照指标，不会自动触发训练。
 - `traces/`、`datasets/`、`reports/`、临时 `_trace_*.json`、`_dataset_*.jsonl` 和 `_gui_trace_*.json` 属于本地生成产物，默认不会提交。

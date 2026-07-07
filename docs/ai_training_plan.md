@@ -199,6 +199,14 @@ Model policy evaluation should provide:
 - No solver fallback hidden inside model policy evaluation.
 - No changes to game rules or trace/dataset contracts.
 
+The 5.2 evaluation entry point is expected to be `learned_policy_eval.py`, with:
+
+- JSONL dataset action accuracy mode.
+- Direct seeded play mode.
+- Actions selected only from `game.generate_legal_moves()`.
+- Execution only through `game.apply_move(move)`.
+- No GUI connection.
+
 ## 5.1 Implementation Notes
 
 The minimal 5.1 training loop is expected to live in separate optional modules:
