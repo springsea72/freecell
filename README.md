@@ -85,6 +85,15 @@ python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy firs
 python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy heuristic
 ```
 
+可选训练最小 imitation policy：
+
+```powershell
+pip install -r requirements-ml.txt
+python train_policy.py --dataset datasets\freecell_policy.jsonl --output models\policy.pt --epochs 3 --seed 123 --device auto
+```
+
+`requirements-ml.txt` 只用于训练/模型实验；普通游戏、solver、benchmark、dataset、report 和 GUI 流程不强制依赖 PyTorch。
+
 直接评估策略游玩表现：
 
 ```powershell

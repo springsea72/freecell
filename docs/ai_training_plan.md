@@ -199,6 +199,17 @@ Model policy evaluation should provide:
 - No solver fallback hidden inside model policy evaluation.
 - No changes to game rules or trace/dataset contracts.
 
+## 5.1 Implementation Notes
+
+The minimal 5.1 training loop is expected to live in separate optional modules:
+
+- `policy_features.py`: standard-library feature extraction and sample validation.
+- `learned_policy.py`: optional PyTorch model loading, legal-move scoring, and masked action selection.
+- `train_policy.py`: optional PyTorch training CLI.
+- `requirements-ml.txt`: optional ML dependency list.
+
+Normal project commands must continue to work without installing `requirements-ml.txt`. Future evaluation tooling should import model code only when explicitly evaluating a learned policy.
+
 ## Explicitly Out of Scope
 
 - Reinforcement learning.
