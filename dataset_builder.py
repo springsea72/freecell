@@ -120,7 +120,10 @@ def build_dataset(trace_paths: Iterable, output_path, skip_invalid=False) -> dic
 def trace_paths_from_args(args) -> list[Path]:
     if args.trace is not None:
         return [Path(args.trace)]
-    return sorted(Path(args.trace_dir).glob("*.json"))
+    trace_dir = Path(args.trace_dir)
+    if not trace_dir.exists() or not trace_dir.is_dir():
+        raise ValueError(f"trace directory does not exist or is not a directory: {trace_dir}")
+    return sorted(trace_dir.glob("*.json"))
 
 
 def parse_args(argv=None):
@@ -136,8 +139,9 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     try:
+        trace_paths = trace_paths_from_args(args)
         summary = build_dataset(
-            trace_paths_from_args(args),
+            trace_paths,
             args.output,
             skip_invalid=args.skip_invalid,
         )

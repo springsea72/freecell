@@ -2,7 +2,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -138,6 +138,45 @@ class DatasetBuilderTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertEqual(2, len(records))
         self.assertIn("samples_written: 2", stdout.getvalue())
+
+    def test_trace_paths_from_args_rejects_missing_trace_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_dir = Path(tmpdir) / "missing"
+            args = dataset_builder.parse_args(
+                ["--trace-dir", str(missing_dir), "--output", str(Path(tmpdir) / "dataset.jsonl")]
+            )
+
+            with self.assertRaisesRegex(ValueError, "trace directory"):
+                dataset_builder.trace_paths_from_args(args)
+
+    def test_cli_missing_trace_dir_returns_nonzero_and_does_not_create_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_dir = Path(tmpdir) / "missing"
+            output_path = Path(tmpdir) / "dataset.jsonl"
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                exit_code = dataset_builder.main(
+                    ["--trace-dir", str(missing_dir), "--output", str(output_path), "--skip-invalid"]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output_path.exists())
+            self.assertIn("trace directory", stderr.getvalue())
+
+    def test_cli_empty_existing_trace_dir_writes_empty_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_dir = Path(tmpdir) / "traces"
+            output_path = Path(tmpdir) / "dataset.jsonl"
+            trace_dir.mkdir()
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = dataset_builder.main(["--trace-dir", str(trace_dir), "--output", str(output_path)])
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual("", output_path.read_text(encoding="utf-8"))
+            self.assertIn("samples_written: 0", stdout.getvalue())
 
 
 if __name__ == "__main__":
