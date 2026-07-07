@@ -48,6 +48,7 @@ class GameGUI:
         self.playback_after_id = None
         self.playback_generation = 0
         self.status_var = tk.StringVar(value="空闲")
+        self.playback_speed_var = tk.IntVar(value=PLAYBACK_INTERVAL_MS)
 
         self.playback_controls_frame = tk.Frame(self.root)
         self.playback_controls_frame.pack(pady=4)
@@ -59,6 +60,21 @@ class GameGUI:
         self.stop_button.pack(side=tk.LEFT, padx=4)
         self.status_label = tk.Label(self.root, textvariable=self.status_var)
         self.status_label.pack()
+        self.params_label = tk.Label(
+            self.root,
+            text=f"max_nodes={GUI_SOLVE_MAX_NODES} max_depth={GUI_SOLVE_MAX_DEPTH}",
+        )
+        self.params_label.pack()
+        self.speed_scale = tk.Scale(
+            self.root,
+            from_=50,
+            to=1000,
+            resolution=50,
+            orient=tk.HORIZONTAL,
+            label="播放间隔(ms)",
+            variable=self.playback_speed_var,
+        )
+        self.speed_scale.pack()
         self.update_playback_controls()
 
         # 绑定鼠标和键盘事件
@@ -79,6 +95,36 @@ class GameGUI:
 
     def is_autoplay_active(self):
         return self.solve_running or self.playback_running
+
+    def get_playback_interval(self):
+        if not hasattr(self, "playback_speed_var"):
+            return PLAYBACK_INTERVAL_MS
+        try:
+            interval = int(self.playback_speed_var.get())
+        except Exception:
+            return PLAYBACK_INTERVAL_MS
+        return max(50, min(1000, interval))
+
+    def format_solve_result_status(self, result):
+        label = "solved" if result.solved else "failed"
+        path_length = len(result.moves)
+        if result.solved:
+            summary = f"已找到解法：{path_length} 步"
+        else:
+            summary = f"未找到解法：{result.reason}"
+        return (
+            f"{label}: {summary}，reason={result.reason}，"
+            f"explored_nodes={result.explored_nodes}，"
+            f"generated_nodes={result.generated_nodes}，"
+            f"max_frontier={result.max_frontier}，"
+            f"path length={path_length}"
+        )
+
+    def block_manual_input_if_autoplay_active(self):
+        if not self.is_autoplay_active():
+            return False
+        self.set_status("自动求解/播放中，手动操作已禁用")
+        return True
 
     def update_playback_controls(self):
         if hasattr(self, "solve_button"):
@@ -132,11 +178,12 @@ class GameGUI:
             return
 
         self.solve_running = False
+        status = self.format_solve_result_status(result)
         if result.solved:
-            self.set_status(f"已找到解法：{len(result.moves)} 步")
             self.start_playback(result.moves)
+            self.set_status(status)
         else:
-            self.set_status(f"未找到解法：{result.reason}")
+            self.set_status(status)
             self.update_playback_controls()
 
     def start_playback(self, moves):
@@ -164,7 +211,7 @@ class GameGUI:
             return
         self.cancel_playback_after()
         self.playback_after_id = self.root.after(
-            PLAYBACK_INTERVAL_MS,
+            self.get_playback_interval(),
             lambda: self.playback_step(token),
         )
 
@@ -293,6 +340,9 @@ class GameGUI:
 
 
     def on_click(self, event):
+        if self.block_manual_input_if_autoplay_active():
+            return
+
         self.selected_card = None
         self.selected_sequence = None
         self.selected_col_idx = None
@@ -344,6 +394,9 @@ class GameGUI:
 
 
     def on_drag(self, event):
+        if self.block_manual_input_if_autoplay_active():
+            return
+
         if not self.selected_sequence or not self.start_pos:
             return
         dx = event.x - self.start_pos[0]
@@ -367,6 +420,9 @@ class GameGUI:
 
 
     def on_release(self, event):
+        if self.block_manual_input_if_autoplay_active():
+            return
+
         if not self.selected_card or not self.selected_sequence:
             return
 
@@ -444,6 +500,9 @@ class GameGUI:
         self.render()
 
     def on_right_click(self, event):
+        if self.block_manual_input_if_autoplay_active():
+            return
+
         # 判断是否真的会发生归堆再记录历史
         snapshot = self.game.clone()
         self.auto_move_to_home()

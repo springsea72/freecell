@@ -30,6 +30,7 @@ def two_move_game():
 class FakeRoot:
     def __init__(self):
         self.callbacks = {}
+        self.delays = {}
         self.cancelled = set()
         self.next_id = 0
 
@@ -37,6 +38,7 @@ class FakeRoot:
         self.next_id += 1
         after_id = f"after-{self.next_id}"
         self.callbacks[after_id] = callback
+        self.delays[after_id] = delay
         return after_id
 
     def after_cancel(self, after_id):
@@ -48,8 +50,8 @@ class FakeRoot:
 
 
 class FakeVar:
-    def __init__(self):
-        self.value = ""
+    def __init__(self, value=""):
+        self.value = value
 
     def set(self, value):
         self.value = value
@@ -66,6 +68,11 @@ class FakeButton:
         self.kwargs.update(kwargs)
 
 
+class FakeEvent:
+    x = 20
+    y = 100
+
+
 def make_app(game):
     app = gui.GameGUI.__new__(gui.GameGUI)
     app.root = FakeRoot()
@@ -79,6 +86,7 @@ def make_app(game):
     app.playback_after_id = None
     app.playback_generation = 0
     app.status_var = FakeVar()
+    app.playback_speed_var = FakeVar(gui.PLAYBACK_INTERVAL_MS)
     app.solve_button = FakeButton()
     app.pause_button = FakeButton()
     app.stop_button = FakeButton()
@@ -204,6 +212,95 @@ class GuiAutoplayTests(unittest.TestCase):
         self.assertEqual(0, app.playback_index)
         self.assertEqual(before, app.game.state_key())
         self.assertEqual([], app.history)
+
+    def test_manual_input_is_ignored_while_autoplay_active(self):
+        app = make_app(one_move_game())
+        app.playback_running = True
+        card_to_drag = app.game.columns[0][-1]
+        app.selected_card = card_to_drag
+        app.selected_sequence = [card_to_drag]
+        app.selected_col_idx = 0
+        app.start_pos = (0, 0)
+        before = app.game.state_key()
+
+        app.on_click(FakeEvent())
+        app.on_drag(FakeEvent())
+        app.on_release(FakeEvent())
+        app.on_right_click(FakeEvent())
+
+        self.assertEqual(before, app.game.state_key())
+        self.assertEqual([], app.history)
+        self.assertTrue(app.playback_running)
+
+    def test_schedule_next_playback_step_uses_current_speed_value(self):
+        app = make_app(one_move_game())
+        app.playback_running = True
+        app.playback_speed_var.set(350)
+
+        app.schedule_next_playback_step()
+
+        self.assertEqual(350, app.root.delays[app.playback_after_id])
+
+    def test_solve_success_status_text_contains_stats(self):
+        app = make_app(one_move_game())
+        app.solve_running = True
+        token = app.playback_generation
+        result = SolveResult(
+            True,
+            [Move(MoveType.COL_TO_HOME, 0)],
+            explored_nodes=7,
+            generated_nodes=8,
+            max_frontier=9,
+            reason="won",
+        )
+
+        app.on_solve_finished(result, token)
+
+        status = app.status_var.get()
+        self.assertIn("solved", status)
+        self.assertIn("reason=won", status)
+        self.assertIn("explored_nodes=7", status)
+        self.assertIn("generated_nodes=8", status)
+        self.assertIn("max_frontier=9", status)
+        self.assertIn("path length=1", status)
+
+    def test_solve_failure_status_text_contains_stats(self):
+        app = make_app(one_move_game())
+        app.solve_running = True
+        token = app.playback_generation
+        result = SolveResult(
+            False,
+            [],
+            explored_nodes=5000,
+            generated_nodes=4999,
+            max_frontier=120,
+            reason="max_nodes_exceeded",
+        )
+
+        app.on_solve_finished(result, token)
+
+        status = app.status_var.get()
+        self.assertIn("failed", status)
+        self.assertIn("reason=max_nodes_exceeded", status)
+        self.assertIn("explored_nodes=5000", status)
+        self.assertIn("generated_nodes=4999", status)
+        self.assertIn("max_frontier=120", status)
+        self.assertIn("path length=0", status)
+
+    def test_manual_input_allowed_after_stop_or_finish(self):
+        stopped = make_app(one_move_game())
+        stopped.playback_running = True
+        stopped.stop_playback()
+        stopped.on_right_click(FakeEvent())
+
+        self.assertEqual([card(Suit.SPADES, 1)], stopped.game.home_cells[Suit.SPADES])
+
+        finished = make_app(one_move_game())
+        finished.playback_running = True
+        finished.finish_playback()
+        finished.on_right_click(FakeEvent())
+
+        self.assertEqual([card(Suit.SPADES, 1)], finished.game.home_cells[Suit.SPADES])
 
 
 if __name__ == "__main__":
