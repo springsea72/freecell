@@ -19,6 +19,7 @@
 - `benchmark.py` 可以批量评估固定 seed 的求解率、节点数、路径长度和耗时。
 - 已解牌局可以导出为 JSON trace，并通过 `replay.py` 复现校验。
 - `dataset_builder.py` 可以把已解 trace 转换为 JSONL 策略学习样本。
+- `policy_baseline.py` 可以在 JSONL 数据集上评估简单策略基线。
 - 使用标准库 `unittest` 覆盖核心规则、求解器、自动游玩入口和基准评估工具。
 
 ## 环境要求
@@ -87,6 +88,14 @@ python dataset_builder.py --trace traces\seed_000001.json --output datasets\one.
 python dataset_builder.py --trace-dir traces --output datasets\freecell_policy.jsonl --skip-invalid
 ```
 
+评估策略基线：
+
+```powershell
+cd D:\freecell
+python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy first_legal
+python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy heuristic
+```
+
 运行测试：
 
 ```powershell
@@ -104,6 +113,7 @@ freecell/
 ├── replay.py       # 回放并验证已保存的求解 trace
 ├── trace_io.py     # JSON trace 读写与验证
 ├── dataset_builder.py # 从 solved trace 生成 JSONL 样本
+├── policy_baseline.py # 在 JSONL 样本上评估简单策略基线
 ├── benchmark.py    # 批量求解器评估工具
 ├── gui.py          # Tkinter 图形界面和交互逻辑
 ├── main.py         # 命令行游戏入口
@@ -164,10 +174,16 @@ freecell/
 - 每条样本包含 action 前状态、合法动作集合、求解路径选择的动作和 action index。
 - 默认遇到非法 trace 返回非 0；`--skip-invalid` 可跳过坏 trace。
 
+`policy_baseline.py` 用于评估无训练策略基线：
+
+- `first_legal` 总是选择第一个合法动作。
+- `heuristic` 使用手写动作优先级选择动作。
+- 输出样本数、命中数和 accuracy，用于后续模型训练的对照基线。
+
 ## 当前限制和后续方向
 
 - 图形界面依赖 Tkinter；如果当前 Python 环境没有安装 Tkinter，`gui.py` 无法启动。
 - 求解器目前是启发式离线搜索，不保证在给定节点/深度上解出所有牌局。
 - 当前还没有 GUI 自动播放控制。
-- AI 训练和策略模型尚未实现；当前 JSONL 数据集可以作为后续训练输入。
+- AI 训练和策略模型尚未实现；当前 JSONL 数据集和策略基线可以作为后续训练输入与对照指标。
 - `test.py` 目前只打印 Python 解释器路径，后续可以删除或改为更有用的开发入口。
