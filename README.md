@@ -38,7 +38,6 @@
 推荐运行图形界面：
 
 ```powershell
-cd D:\freecell
 python gui.py
 ```
 
@@ -55,7 +54,6 @@ python gui.py
 也可以运行命令行版本：
 
 ```powershell
-cd D:\freecell
 python main.py
 ```
 
@@ -64,7 +62,6 @@ python main.py
 运行离线求解器：
 
 ```powershell
-cd D:\freecell
 python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200
 python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200 --save-trace traces\seed_000001.json
 ```
@@ -72,14 +69,12 @@ python autoplay.py --seed 1 --max-nodes 5000 --max-depth 200 --save-trace traces
 回放已保存的求解路径：
 
 ```powershell
-cd D:\freecell
 python replay.py traces\seed_000001.json
 ```
 
 批量评估求解器：
 
 ```powershell
-cd D:\freecell
 python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200
 python benchmark.py --seeds 1 2 3 --max-nodes 1000 --max-depth 100 --format csv
 python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200 --save-solved-traces traces
@@ -88,7 +83,6 @@ python benchmark.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 
 生成策略学习数据集：
 
 ```powershell
-cd D:\freecell
 python dataset_builder.py --trace traces\seed_000001.json --output datasets\one.jsonl
 python dataset_builder.py --trace-dir traces --output datasets\freecell_policy.jsonl --skip-invalid
 ```
@@ -96,7 +90,6 @@ python dataset_builder.py --trace-dir traces --output datasets\freecell_policy.j
 评估策略基线：
 
 ```powershell
-cd D:\freecell
 python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy first_legal
 python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy heuristic
 ```
@@ -104,7 +97,6 @@ python policy_baseline.py --dataset datasets\freecell_policy.jsonl --policy heur
 直接评估策略游玩表现：
 
 ```powershell
-cd D:\freecell
 python policy_player.py --seed 1 --policy heuristic --max-steps 500
 python policy_player.py --seed-start 1 --seed-count 10 --policy heuristic --max-steps 500
 ```
@@ -112,7 +104,6 @@ python policy_player.py --seed-start 1 --seed-count 10 --policy heuristic --max-
 生成统一评估报告：
 
 ```powershell
-cd D:\freecell
 python report.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200 --player-policy heuristic --max-steps 500
 python report.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200 --dataset datasets\freecell_policy.jsonl --baseline-policy heuristic --player-policy heuristic --format json
 ```
@@ -120,7 +111,6 @@ python report.py --seed-start 1 --seed-count 10 --max-nodes 5000 --max-depth 200
 运行测试：
 
 ```powershell
-cd D:\freecell
 python -m unittest discover -s tests
 ```
 
