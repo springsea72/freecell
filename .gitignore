@@ -16,3 +16,8 @@ reports/
 _trace_*.json
 _dataset_*.jsonl
 _gui_trace_*.json
+models/
+checkpoints/
+*.pt
+*.pth
+*.onnx

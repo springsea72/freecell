@@ -130,6 +130,7 @@ freecell/
 
 ## 当前限制
 
+- AI policy 训练方案见 [docs/ai_training_plan.md](docs/ai_training_plan.md)。当前仓库只包含训练前设计，不包含训练脚本、模型文件或强制 ML 依赖。
 - solver 是启发式搜索，有节点和深度上限，不保证解出所有牌局。
 - GUI 自动播放只接入 solver 路径和 solved trace 回放，未接入 policy player。
 - AI 训练、神经网络和策略模型尚未实现。
