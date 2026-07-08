@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -17,6 +18,7 @@ def args(output_dir, **overrides):
         "max_depth": 20,
         "epochs": 1,
         "batch_size": 1,
+        "hidden_size": 64,
         "lr": 0.001,
         "device": "cpu",
         "validation_split": 0.0,
@@ -43,16 +45,26 @@ class ExperimentTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             experiment.parse_args(["--seed-start", "1", "--seed-count", "1", "--epochs", "0", "--output-dir", "out"])
 
+    def test_parse_rejects_invalid_hidden_size(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            experiment.parse_args(
+                ["--seed-start", "1", "--seed-count", "1", "--hidden-size", "0", "--output-dir", "out"]
+            )
+
     def test_parse_requires_output_dir(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             experiment.parse_args(["--seed-start", "1", "--seed-count", "1"])
 
     def test_no_solved_trace_returns_error_before_training(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "experiment.solve", return_value=SolveResult(False, [], 1, 0, 0, "max_nodes_exceeded")
-        ), patch("experiment.train_policy.train") as train:
-            with self.assertRaisesRegex(RuntimeError, "no solved traces"):
-                experiment.run_experiment(args(tmpdir))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "experiment"
+            with patch(
+                "experiment.solve", return_value=SolveResult(False, [], 1, 0, 0, "max_nodes_exceeded")
+            ), patch("experiment.train_policy.train") as train:
+                with self.assertRaisesRegex(RuntimeError, "no solved traces"):
+                    experiment.run_experiment(args(output_dir))
+
+            self.assertFalse((output_dir / "manifest.json").exists())
 
         train.assert_not_called()
 
@@ -74,10 +86,22 @@ class ExperimentTests(unittest.TestCase):
             calls.append("train")
             self.assert_path_under(train_args.dataset, output_dir)
             self.assert_path_under(train_args.output, output_dir)
+            self.assertEqual(64, train_args.hidden_size)
+            self.assertEqual(1, train_args.batch_size)
+            self.assertEqual(0.001, train_args.lr)
+            self.assertEqual(0.0, train_args.validation_split)
             return {
+                "samples": 3,
+                "train_samples": 3,
+                "validation_samples": 0,
+                "epochs": 1,
+                "batch_size": train_args.batch_size,
+                "hidden_size": train_args.hidden_size,
+                "lr": train_args.lr,
                 "device": "cpu",
                 "train_accuracy": 0.25,
                 "validation_accuracy": 0.5,
+                "model_path": str(train_args.output),
             }
 
         def fake_build_report(seeds, **kwargs):
@@ -100,15 +124,33 @@ class ExperimentTests(unittest.TestCase):
             ):
                 summary = experiment.run_experiment(args(output_dir))
 
-        self.assertEqual(["trace", "trace", "dataset", "train", "report"], calls)
-        self.assertEqual(2, summary["seeds"])
-        self.assertEqual(2, summary["solved_traces"])
-        self.assertEqual(3, summary["samples"])
-        self.assert_path_under(summary["model_path"], output_dir)
-        self.assert_path_under(summary["report_path"], output_dir)
-        self.assertEqual("cpu", summary["device"])
-        self.assertEqual(0.25, summary["train_accuracy"])
-        self.assertEqual(0.5, summary["validation_accuracy"])
+            self.assertEqual(["trace", "trace", "dataset", "train", "report"], calls)
+            self.assertEqual(2, summary["seeds"])
+            self.assertEqual(2, summary["solved_traces"])
+            self.assertEqual(3, summary["samples"])
+            self.assert_path_under(summary["model_path"], output_dir)
+            self.assert_path_under(summary["report_path"], output_dir)
+            self.assert_path_under(summary["manifest_path"], output_dir)
+            self.assertEqual("cpu", summary["device"])
+            self.assertEqual(0.25, summary["train_accuracy"])
+            self.assertEqual(0.5, summary["validation_accuracy"])
+
+            manifest_path = Path(summary["manifest_path"])
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(experiment.MANIFEST_VERSION, manifest["version"])
+            self.assertEqual(experiment.MANIFEST_SCHEMA, manifest["schema"])
+            self.assertEqual(3, manifest["summary"]["samples"])
+            self.assertEqual(2, manifest["summary"]["solved_traces"])
+            self.assertEqual(64, manifest["training"]["hidden_size"])
+            self.assertEqual(1, manifest["training"]["batch_size"])
+            self.assertEqual(0.001, manifest["training"]["lr"])
+            self.assert_path_under(manifest["paths"]["dataset"], output_dir)
+            self.assert_path_under(manifest["paths"]["model"], output_dir)
+            for report_path in manifest["paths"]["reports"]:
+                self.assert_path_under(report_path, output_dir)
+            for trace_path in manifest["paths"]["traces"]:
+                self.assert_path_under(trace_path, output_dir)
 
     def test_summary_fields_are_stable(self):
         summary = {
@@ -117,6 +159,7 @@ class ExperimentTests(unittest.TestCase):
             "samples": 3,
             "model_path": "out/models/policy.pt",
             "report_path": "out/report.json",
+            "manifest_path": "out/manifest.json",
             "device": "cpu",
             "train_accuracy": 0.25,
             "validation_accuracy": 0.5,
@@ -127,6 +170,7 @@ class ExperimentTests(unittest.TestCase):
             "samples",
             "model_path",
             "report_path",
+            "manifest_path",
             "device",
             "train_accuracy",
             "validation_accuracy",

@@ -49,26 +49,41 @@ def train(args) -> dict:
     samples = load_samples(args.dataset)
     train_samples, validation_samples = split_samples(samples, args.validation_split, args.seed)
 
-    model = learned_policy.create_model(torch=torch).to(device)
+    hidden_size = getattr(args, "hidden_size", learned_policy.DEFAULT_HIDDEN_SIZE)
+    batch_size = getattr(args, "batch_size", 1)
+    if hidden_size < 1:
+        raise ValueError("hidden_size must be >= 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    model = learned_policy.create_model(hidden_size=hidden_size, torch=torch).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     train_loss = 0.0
     train_accuracy = 0.0
     for epoch in range(args.epochs):
         random.Random(args.seed + epoch).shuffle(train_samples)
-        train_loss, train_accuracy = _run_epoch(model, train_samples, optimizer, device, torch)
+        train_loss, train_accuracy = _run_epoch(
+            model,
+            train_samples,
+            optimizer,
+            device,
+            torch,
+            batch_size=batch_size,
+        )
 
     validation_accuracy = _evaluate(model, validation_samples, device, torch) if validation_samples else 0.0
 
     metadata = learned_policy.base_metadata(
         seed=args.seed,
+        hidden_size=hidden_size,
         training_args={
             "epochs": args.epochs,
-            "batch_size": args.batch_size,
+            "batch_size": batch_size,
+            "hidden_size": hidden_size,
             "lr": args.lr,
             "validation_split": args.validation_split,
             "device": str(device),
-            "sample_iteration": True,
+            "batch_accumulation": True,
         },
     )
     learned_policy.save_model(args.output, model, metadata)
@@ -78,6 +93,9 @@ def train(args) -> dict:
         "train_samples": len(train_samples),
         "validation_samples": len(validation_samples),
         "epochs": args.epochs,
+        "batch_size": batch_size,
+        "hidden_size": hidden_size,
+        "lr": args.lr,
         "device": str(device),
         "train_loss": train_loss,
         "train_accuracy": train_accuracy,
@@ -86,17 +104,26 @@ def train(args) -> dict:
     }
 
 
-def _run_epoch(model, samples, optimizer, device, torch):
+def _run_epoch(model, samples, optimizer, device, torch, batch_size=1):
     model.train()
     total_loss = 0.0
     correct = 0
-    for sample in samples:
+    batch_size = max(1, int(batch_size))
+    optimizer.zero_grad()
+    pending_losses = []
+
+    for sample_index, sample in enumerate(samples, start=1):
         loss, predicted, target = _sample_loss(model, sample, device, torch)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        pending_losses.append(loss)
         total_loss += float(loss.detach().cpu())
         correct += int(predicted == target)
+
+        if len(pending_losses) >= batch_size or sample_index == len(samples):
+            batch_loss = torch.stack(pending_losses).mean()
+            batch_loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            pending_losses = []
     return total_loss / len(samples), correct / len(samples)
 
 
@@ -144,9 +171,10 @@ def parse_args(argv=None):
         "--batch-size",
         type=int,
         default=1,
-        help="Accepted for CLI compatibility; current trainer updates one sample at a time.",
+        help="Number of samples to accumulate before each optimizer step.",
     )
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--hidden-size", type=int, default=learned_policy.DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -165,6 +193,9 @@ def main(argv=None):
     if args.batch_size < 1:
         print("batch-size must be >= 1", file=sys.stderr)
         return 1
+    if args.hidden_size < 1:
+        print("hidden-size must be >= 1", file=sys.stderr)
+        return 1
 
     try:
         summary = train(args)
@@ -177,6 +208,9 @@ def main(argv=None):
         "train_samples",
         "validation_samples",
         "epochs",
+        "batch_size",
+        "hidden_size",
+        "lr",
         "device",
         "train_loss",
         "train_accuracy",

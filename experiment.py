@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ from trace_io import save_trace
 
 
 DEFAULT_TRAINING_SEED = 123
+MANIFEST_VERSION = 1
+MANIFEST_SCHEMA = "freecell_experiment_manifest"
 
 
 def parse_args(argv=None):
@@ -22,6 +25,7 @@ def parse_args(argv=None):
     parser.add_argument("--max-depth", type=int, default=200)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--hidden-size", type=int, default=train_policy.learned_policy.DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -42,6 +46,8 @@ def parse_args(argv=None):
         parser.error("--epochs must be positive")
     if args.batch_size <= 0:
         parser.error("--batch-size must be positive")
+    if args.hidden_size <= 0:
+        parser.error("--hidden-size must be positive")
     if args.lr <= 0:
         parser.error("--lr must be positive")
     if args.validation_split < 0 or args.validation_split >= 1:
@@ -63,11 +69,20 @@ def run_experiment(args) -> dict:
     model_path = model_dir / "policy.pt"
     report_text_path = output_dir / "report.txt"
     report_json_path = output_dir / "report.json"
+    manifest_path = output_dir / "manifest.json"
 
     for path in (trace_dir, model_dir):
         path.mkdir(parents=True, exist_ok=True)
 
-    _assert_under_output(output_dir, trace_dir, dataset_path, model_path, report_text_path, report_json_path)
+    _assert_under_output(
+        output_dir,
+        trace_dir,
+        dataset_path,
+        model_path,
+        report_text_path,
+        report_json_path,
+        manifest_path,
+    )
 
     seeds = list(range(args.seed_start, args.seed_start + args.seed_count))
     solved_trace_paths = _solve_and_save_traces(
@@ -90,6 +105,7 @@ def run_experiment(args) -> dict:
             output=model_path,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            hidden_size=args.hidden_size,
             lr=args.lr,
             seed=args.training_seed,
             device=args.device,
@@ -112,12 +128,13 @@ def run_experiment(args) -> dict:
 
     report_paths = _write_reports(report_data, args.report_format, report_text_path, report_json_path)
 
-    return {
+    summary = {
         "seeds": len(seeds),
         "solved_traces": len(solved_trace_paths),
         "samples": samples,
         "model_path": str(model_path),
         "report_path": _summary_report_path(report_paths),
+        "manifest_path": str(manifest_path),
         "device": train_summary["device"],
         "train_accuracy": train_summary["train_accuracy"],
         "validation_accuracy": train_summary["validation_accuracy"],
@@ -125,6 +142,18 @@ def run_experiment(args) -> dict:
         "dataset_path": str(dataset_path),
         "output_dir": str(output_dir),
     }
+    _write_manifest(
+        manifest_path,
+        args=args,
+        seeds=seeds,
+        solved_trace_paths=solved_trace_paths,
+        dataset_path=dataset_path,
+        model_path=model_path,
+        report_paths=report_paths,
+        train_summary=train_summary,
+        summary=summary,
+    )
+    return summary
 
 
 def _solve_and_save_traces(seeds, trace_dir: Path, max_nodes: int, max_depth: int) -> list[Path]:
@@ -150,6 +179,72 @@ def _write_reports(report_data, report_format, text_path: Path, json_path: Path)
     return paths
 
 
+def _write_manifest(
+    manifest_path: Path,
+    *,
+    args,
+    seeds: list[int],
+    solved_trace_paths: list[Path],
+    dataset_path: Path,
+    model_path: Path,
+    report_paths: list[Path],
+    train_summary: dict,
+    summary: dict,
+) -> None:
+    manifest = {
+        "version": MANIFEST_VERSION,
+        "schema": MANIFEST_SCHEMA,
+        "parameters": {
+            "max_nodes": args.max_nodes,
+            "max_depth": args.max_depth,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "hidden_size": args.hidden_size,
+            "lr": args.lr,
+            "device": args.device,
+            "validation_split": args.validation_split,
+            "report_format": args.report_format,
+            "player_max_steps": args.player_max_steps,
+            "model_max_steps": args.model_max_steps,
+            "training_seed": args.training_seed,
+        },
+        "seed_range": {
+            "start": args.seed_start,
+            "count": args.seed_count,
+            "seeds": seeds,
+        },
+        "summary": {
+            "seeds": summary["seeds"],
+            "solved_traces": summary["solved_traces"],
+            "samples": summary["samples"],
+            "model_path": summary["model_path"],
+            "report_path": summary["report_path"],
+            "manifest_path": summary["manifest_path"],
+            "device": summary["device"],
+            "train_accuracy": summary["train_accuracy"],
+            "validation_accuracy": summary["validation_accuracy"],
+        },
+        "paths": {
+            "dataset": str(dataset_path),
+            "model": str(model_path),
+            "reports": [str(path) for path in report_paths],
+            "traces": [str(path) for path in solved_trace_paths],
+        },
+        "training": {
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "hidden_size": args.hidden_size,
+            "lr": args.lr,
+            "validation_split": args.validation_split,
+            "device": summary["device"],
+            "requested_device": args.device,
+            "seed": args.training_seed,
+        },
+        "train_summary": train_summary,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _summary_report_path(paths: list[Path]) -> str:
     if len(paths) == 1:
         return str(paths[0])
@@ -171,6 +266,7 @@ def print_summary(summary) -> None:
         "samples",
         "model_path",
         "report_path",
+        "manifest_path",
         "device",
         "train_accuracy",
         "validation_accuracy",

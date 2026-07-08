@@ -59,6 +59,33 @@ class TrainPolicyTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertIn("dataset does not exist", stderr.getvalue())
 
+    def test_cli_rejects_invalid_hidden_size(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = train_policy.main(
+                    [
+                        "--dataset",
+                        str(dataset),
+                        "--output",
+                        str(output),
+                        "--epochs",
+                        "1",
+                        "--hidden-size",
+                        "0",
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertIn("hidden-size must be >= 1", stderr.getvalue())
+            self.assertFalse(output.exists())
+
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
     def test_tiny_dataset_trains_saves_and_loads_on_cpu(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -80,6 +107,10 @@ class TrainPolicyTests(unittest.TestCase):
                         "123",
                         "--device",
                         "cpu",
+                        "--batch-size",
+                        "1",
+                        "--hidden-size",
+                        "32",
                         "--validation-split",
                         "0",
                     ]
@@ -88,12 +119,51 @@ class TrainPolicyTests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertTrue(output.exists())
             self.assertIn("samples: 1", stdout.getvalue())
+            self.assertIn("batch_size: 1", stdout.getvalue())
+            self.assertIn("hidden_size: 32", stdout.getvalue())
+            self.assertIn("lr: 0.001000", stdout.getvalue())
             self.assertIn("device: cpu", stdout.getvalue())
 
             bundle = learned_policy.load_model(output, device="cpu")
+            self.assertEqual(32, bundle.metadata["hidden_size"])
+            self.assertEqual(32, bundle.metadata["training_args"]["hidden_size"])
+            self.assertEqual(32, bundle.model[0].out_features)
             game = FreeCellGame(deal=empty_deal())
             game.columns[0] = [card(Suit.SPADES, 1)]
             self.assertIn(learned_policy.choose_action(game, bundle, device="cpu"), game.generate_legal_moves())
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_run_epoch_uses_batch_size_for_optimizer_steps(self):
+        class CountingOptimizer:
+            def __init__(self, model):
+                self.model = model
+                self.steps = 0
+                self.zeroes = 0
+
+            def zero_grad(self):
+                self.zeroes += 1
+                self.model.zero_grad(set_to_none=True)
+
+            def step(self):
+                self.steps += 1
+
+        model = learned_policy.create_model(hidden_size=16, torch=torch)
+        optimizer = CountingOptimizer(model)
+        samples = [tiny_sample(), tiny_sample(), tiny_sample(), tiny_sample()]
+
+        loss, accuracy = train_policy._run_epoch(
+            model,
+            samples,
+            optimizer,
+            torch.device("cpu"),
+            torch,
+            batch_size=2,
+        )
+
+        self.assertGreaterEqual(loss, 0.0)
+        self.assertGreaterEqual(accuracy, 0.0)
+        self.assertEqual(2, optimizer.steps)
+        self.assertEqual(3, optimizer.zeroes)
 
 
 if __name__ == "__main__":
