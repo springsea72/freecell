@@ -13,6 +13,7 @@ env/
 traces/
 datasets/
 reports/
+experiments/
 _trace_*.json
 _dataset_*.jsonl
 _gui_trace_*.json
