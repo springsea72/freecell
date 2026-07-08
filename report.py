@@ -17,6 +17,9 @@ def build_report(
     baseline_policy="heuristic",
     player_policy="heuristic",
     max_steps=500,
+    model_path=None,
+    model_device="auto",
+    model_max_steps=500,
 ) -> dict:
     seeds = list(seeds)
     solver_records = benchmark.run_benchmark(seeds, max_nodes=max_nodes, max_depth=max_depth)
@@ -32,11 +35,22 @@ def build_report(
         baseline_summary = policy_baseline.evaluate_file(dataset, policy=baseline_policy)
         baseline_summary["skipped"] = False
 
-    return {
+    result = {
         "solver": _solver_summary_to_dict(solver_summary),
         "policy_baseline": baseline_summary,
         "policy_player": _player_summary_to_dict(player_summary),
     }
+
+    if model_path is not None:
+        result["learned_policy"] = _build_learned_policy_summary(
+            seeds,
+            model_path=model_path,
+            dataset=dataset,
+            device=model_device,
+            max_steps=model_max_steps,
+        )
+
+    return result
 
 
 def render_text(report) -> str:
@@ -78,6 +92,40 @@ def render_text(report) -> str:
             f"average_home_cards: {player['average_home_cards']:.2f}",
         ]
     )
+
+    learned = report.get("learned_policy")
+    if learned is not None:
+        dataset = learned["dataset"]
+        play = learned["play"]
+        lines.extend(
+            [
+                "",
+                "learned_policy",
+                f"model_path: {learned['model_path']}",
+                f"device: {learned['device']}",
+                "dataset",
+            ]
+        )
+        if dataset.get("skipped"):
+            lines.append(f"skipped: {dataset['reason']}")
+        else:
+            lines.extend(
+                [
+                    f"samples: {dataset['samples']}",
+                    f"correct: {dataset['correct']}",
+                    f"accuracy: {dataset['accuracy']:.6f}",
+                ]
+            )
+        lines.extend(
+            [
+                "play",
+                f"games: {play['games']}",
+                f"won: {play['won']}",
+                f"win_rate: {play['win_rate']:.6f}",
+                f"average_steps: {play['average_steps']:.2f}",
+                f"average_home_cards: {play['average_home_cards']:.2f}",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -97,6 +145,9 @@ def parse_args(argv=None):
     parser.add_argument("--baseline-policy", choices=sorted(policy_baseline.POLICIES), default="heuristic")
     parser.add_argument("--player-policy", choices=sorted(policy_baseline.POLICIES), default="heuristic")
     parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--model")
+    parser.add_argument("--model-device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--model-max-steps", type=int, default=500)
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
 
@@ -112,6 +163,8 @@ def parse_args(argv=None):
         parser.error("--max-depth must be non-negative")
     if args.max_steps < 0:
         parser.error("--max-steps must be non-negative")
+    if args.model_max_steps < 0:
+        parser.error("--model-max-steps must be non-negative")
     return args
 
 
@@ -126,6 +179,9 @@ def main(argv=None):
     if args.dataset is not None and not Path(args.dataset).exists():
         print(f"dataset does not exist: {args.dataset}", file=sys.stderr)
         return 1
+    if args.model is not None and not Path(args.model).exists():
+        print(f"model does not exist: {args.model}", file=sys.stderr)
+        return 1
 
     try:
         report = build_report(
@@ -136,8 +192,11 @@ def main(argv=None):
             baseline_policy=args.baseline_policy,
             player_policy=args.player_policy,
             max_steps=args.max_steps,
+            model_path=args.model,
+            model_device=args.model_device,
+            model_max_steps=args.model_max_steps,
         )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (ModuleNotFoundError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"failed to build report: {exc}", file=sys.stderr)
         return 1
 
@@ -168,6 +227,46 @@ def _player_summary_to_dict(summary) -> dict:
         "average_home_cards": summary["average_home_cards"],
         "policy": summary["policy"],
         "results": [_to_plain_dict(result) for result in summary.get("results", [])],
+    }
+
+
+def _build_learned_policy_summary(seeds, model_path, dataset=None, device="auto", max_steps=500) -> dict:
+    import learned_policy_eval
+
+    play_summary = learned_policy_eval.evaluate_seeds(
+        seeds,
+        model_path=model_path,
+        max_steps=max_steps,
+        device=device,
+    )
+
+    if dataset is None:
+        dataset_summary = {
+            "skipped": True,
+            "reason": "no dataset provided",
+        }
+        model_device = play_summary["device"]
+    else:
+        dataset_result = learned_policy_eval.evaluate_file(dataset, model_path, device=device)
+        dataset_summary = {
+            "skipped": False,
+            "samples": dataset_result["samples"],
+            "correct": dataset_result["correct"],
+            "accuracy": dataset_result["accuracy"],
+        }
+        model_device = dataset_result["device"]
+
+    return {
+        "model_path": str(model_path),
+        "device": model_device,
+        "dataset": dataset_summary,
+        "play": {
+            "games": play_summary["games"],
+            "won": play_summary["won"],
+            "win_rate": play_summary["win_rate"],
+            "average_steps": play_summary["average_steps"],
+            "average_home_cards": play_summary["average_home_cards"],
+        },
     }
 
 
