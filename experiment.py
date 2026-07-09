@@ -26,6 +26,11 @@ def parse_args(argv=None):
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--hidden-size", type=int, default=train_policy.learned_policy.DEFAULT_HIDDEN_SIZE)
+    parser.add_argument(
+        "--progress-loss-weight",
+        type=float,
+        default=train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
+    )
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -48,6 +53,8 @@ def parse_args(argv=None):
         parser.error("--batch-size must be positive")
     if args.hidden_size <= 0:
         parser.error("--hidden-size must be positive")
+    if args.progress_loss_weight < 0:
+        parser.error("--progress-loss-weight must be non-negative")
     if args.lr <= 0:
         parser.error("--lr must be positive")
     if args.validation_split < 0 or args.validation_split >= 1:
@@ -106,6 +113,7 @@ def run_experiment(args) -> dict:
             epochs=args.epochs,
             batch_size=args.batch_size,
             hidden_size=args.hidden_size,
+            progress_loss_weight=args.progress_loss_weight,
             lr=args.lr,
             seed=args.training_seed,
             device=args.device,
@@ -200,6 +208,7 @@ def _write_manifest(
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "hidden_size": args.hidden_size,
+            "progress_loss_weight": args.progress_loss_weight,
             "lr": args.lr,
             "device": args.device,
             "validation_split": args.validation_split,
@@ -234,6 +243,7 @@ def _write_manifest(
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "hidden_size": args.hidden_size,
+            "progress_loss_weight": args.progress_loss_weight,
             "lr": args.lr,
             "validation_split": args.validation_split,
             "device": summary["device"],

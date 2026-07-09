@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import experiment
+import train_policy
 from solver import SolveResult
 
 
@@ -19,6 +20,7 @@ def args(output_dir, **overrides):
         "epochs": 1,
         "batch_size": 1,
         "hidden_size": 64,
+        "progress_loss_weight": train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
         "lr": 0.001,
         "device": "cpu",
         "validation_split": 0.0,
@@ -49,6 +51,42 @@ class ExperimentTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             experiment.parse_args(
                 ["--seed-start", "1", "--seed-count", "1", "--hidden-size", "0", "--output-dir", "out"]
+            )
+
+    def test_parse_accepts_progress_loss_weight(self):
+        parsed = experiment.parse_args(
+            [
+                "--seed-start",
+                "1",
+                "--seed-count",
+                "1",
+                "--progress-loss-weight",
+                "0.2",
+                "--output-dir",
+                "out",
+            ]
+        )
+
+        self.assertEqual(0.2, parsed.progress_loss_weight)
+
+    def test_parse_default_progress_loss_weight_matches_train_default(self):
+        parsed = experiment.parse_args(["--seed-start", "1", "--seed-count", "1", "--output-dir", "out"])
+
+        self.assertEqual(train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT, parsed.progress_loss_weight)
+
+    def test_parse_rejects_negative_progress_loss_weight(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            experiment.parse_args(
+                [
+                    "--seed-start",
+                    "1",
+                    "--seed-count",
+                    "1",
+                    "--progress-loss-weight",
+                    "-0.1",
+                    "--output-dir",
+                    "out",
+                ]
             )
 
     def test_parse_requires_output_dir(self):
@@ -88,6 +126,7 @@ class ExperimentTests(unittest.TestCase):
             self.assert_path_under(train_args.output, output_dir)
             self.assertEqual(64, train_args.hidden_size)
             self.assertEqual(1, train_args.batch_size)
+            self.assertEqual(0.1, train_args.progress_loss_weight)
             self.assertEqual(0.001, train_args.lr)
             self.assertEqual(0.0, train_args.validation_split)
             return {
@@ -97,6 +136,7 @@ class ExperimentTests(unittest.TestCase):
                 "epochs": 1,
                 "batch_size": train_args.batch_size,
                 "hidden_size": train_args.hidden_size,
+                "progress_loss_weight": train_args.progress_loss_weight,
                 "lr": train_args.lr,
                 "device": "cpu",
                 "train_accuracy": 0.25,
@@ -144,6 +184,9 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(2, manifest["summary"]["solved_traces"])
             self.assertEqual(64, manifest["training"]["hidden_size"])
             self.assertEqual(1, manifest["training"]["batch_size"])
+            self.assertEqual(0.1, manifest["parameters"]["progress_loss_weight"])
+            self.assertEqual(0.1, manifest["training"]["progress_loss_weight"])
+            self.assertEqual(0.1, manifest["train_summary"]["progress_loss_weight"])
             self.assertEqual(0.001, manifest["training"]["lr"])
             self.assert_path_under(manifest["paths"]["dataset"], output_dir)
             self.assert_path_under(manifest["paths"]["model"], output_dir)

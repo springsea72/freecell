@@ -241,6 +241,8 @@ The trainer also exposes `--progress-loss-weight`, defaulting to `0.1`. When JSO
 
 The experiment orchestrator writes all generated traces, datasets, models, reports, and `manifest.json` under the requested output directory. The manifest records experiment parameters, seed range, solved trace count, dataset sample count, generated paths, and training summary. These generated artifacts remain ignored by git.
 
+Experiment runs should pass through `--progress-loss-weight` to training and record it in both manifest parameters and training metadata so progress-loss experiments remain reproducible.
+
 ## Explicitly Out of Scope
 
 - Reinforcement learning.
