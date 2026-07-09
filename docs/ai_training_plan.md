@@ -61,11 +61,13 @@ State features:
   - one of 4 home cells,
   - or absent only if input validation fails.
 - Home progress per suit: top home value from 0 to 13.
+- Next home value per suit, encoded as the next card rank that can be moved home.
 - Free-cell occupancy: four binary values plus total free cells used/free.
 - Column features:
   - length of each column,
   - top card suit/value/color if present,
   - movable suffix length if easy to derive from state,
+  - whether each column has a buried low card such as A/2/3,
   - empty-column indicator.
 - Global features:
   - total home cards,
@@ -81,6 +83,7 @@ Candidate move features:
 - Moving card value/suit/color if derivable from state.
 - Destination top card value/suit/color for column moves if present.
 - Booleans for home move, free-cell release, source-column emptied, target-column empty, and multi-card sequence.
+- Feature version 2 adds action-effect indicators for increasing home cards, exposing buried A/2/3, emptying the source column, occupying or releasing a free cell, moving to an empty column, reducing immediate buffer space, and moving a card near current home progress.
 
 Recommended first architecture:
 

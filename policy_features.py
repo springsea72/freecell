@@ -1,4 +1,4 @@
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2
 SUPPORTED_SAMPLE_VERSION = 1
 
 SUITS = ("SPADES", "HEARTS", "CLUBS", "DIAMONDS")
@@ -7,8 +7,20 @@ MOVE_TYPES = ("FREE_TO_HOME", "COL_TO_HOME", "FREE_TO_COL", "COL_TO_COL", "COL_T
 CARDS = [(suit, value) for suit in SUITS for value in range(1, 14)]
 CARD_INDEX = {card: idx for idx, card in enumerate(CARDS)}
 
-STATE_FEATURE_SIZE = 252
-MOVE_FEATURE_SIZE = 38
+STATE_HOME_NEXT_START = 252
+STATE_MOVABLE_SUFFIX_START = STATE_HOME_NEXT_START + len(SUITS)
+STATE_BURIED_LOW_START = STATE_MOVABLE_SUFFIX_START + 8
+STATE_FEATURE_SIZE = STATE_BURIED_LOW_START + 8
+
+MOVE_INCREASES_HOME_IDX = 38
+MOVE_RELEASES_LOW_IDX = MOVE_INCREASES_HOME_IDX + 1
+MOVE_SOURCE_EMPTIED_IDX = MOVE_RELEASES_LOW_IDX + 1
+MOVE_OCCUPIES_FREE_IDX = MOVE_SOURCE_EMPTIED_IDX + 1
+MOVE_RELEASES_FREE_IDX = MOVE_OCCUPIES_FREE_IDX + 1
+MOVE_TO_EMPTY_COLUMN_IDX = MOVE_RELEASES_FREE_IDX + 1
+MOVE_REDUCES_BUFFER_IDX = MOVE_TO_EMPTY_COLUMN_IDX + 1
+MOVE_TARGET_NEAR_HOME_IDX = MOVE_REDUCES_BUFFER_IDX + 1
+MOVE_FEATURE_SIZE = MOVE_TARGET_NEAR_HOME_IDX + 1
 
 
 def validate_sample(sample: dict) -> None:
@@ -96,6 +108,9 @@ def state_to_features(state: dict, remaining_moves: int = 0) -> list[float]:
             min(max(remaining_moves or 0, 0), 200) / 200.0,
         ]
     )
+    features.extend(_next_home_value(home_cells, suit) / 13.0 for suit in SUITS)
+    features.extend(min(_movable_suffix_length(column), 13) / 13.0 for column in columns)
+    features.extend(1.0 if _has_buried_low_card(column) else 0.0 for column in columns)
 
     if len(features) != STATE_FEATURE_SIZE:
         raise AssertionError(f"state feature size changed: {len(features)}")
@@ -140,6 +155,18 @@ def move_to_features(state: dict, move: dict) -> list[float]:
     features.append(_card_value(destination_top) / 13.0 if destination_top else 0.0)
     features.append(_card_color_value(destination_top) if destination_top else 0.0)
     features.append(1.0 if dest_is_col and destination_top is None else 0.0)
+    features.extend(
+        [
+            1.0 if is_home_move and moving_card else 0.0,
+            1.0 if _move_releases_low_card(state, move) else 0.0,
+            1.0 if _move_empties_source_column(state, move) else 0.0,
+            1.0 if dest_is_free and moving_card else 0.0,
+            1.0 if source_is_free and moving_card else 0.0,
+            1.0 if dest_is_col and destination_top is None else 0.0,
+            1.0 if _move_reduces_buffer_space(state, move) else 0.0,
+            1.0 if _move_targets_near_home_card(state, move, moving_card) else 0.0,
+        ]
+    )
 
     if len(features) != MOVE_FEATURE_SIZE:
         raise AssertionError(f"move feature size changed: {len(features)}")
@@ -209,6 +236,96 @@ def _destination_top_card(state: dict, move: dict):
         return None
     column = _safe_get(state["columns"], move.get("to_idx"), [])
     return column[-1] if column else None
+
+
+def _next_home_value(home_cells: dict, suit: str) -> int:
+    stack = home_cells.get(suit, [])
+    top_value = _card_value(stack[-1]) if stack else 0
+    next_value = top_value + 1
+    return next_value if next_value <= 13 else 0
+
+
+def _movable_suffix_length(column: list[dict]) -> int:
+    if not column:
+        return 0
+    length = 1
+    for idx in range(len(column) - 2, -1, -1):
+        lower_card = column[idx]
+        upper_card = column[idx + 1]
+        if _card_color_value(lower_card) == _card_color_value(upper_card):
+            break
+        if _card_value(lower_card) != _card_value(upper_card) + 1:
+            break
+        length += 1
+    return length
+
+
+def _has_buried_low_card(column: list[dict]) -> bool:
+    return any(_is_low_card(card) for card in column[:-1])
+
+
+def _is_low_card(card: dict) -> bool:
+    value = _card_value(card)
+    return 1 <= value <= 3
+
+
+def _move_empties_source_column(state: dict, move: dict) -> bool:
+    if move.get("move_type") not in ("COL_TO_HOME", "COL_TO_FREE", "COL_TO_COL"):
+        return False
+    count = move.get("count", 1) or 1
+    column = _safe_get(state["columns"], move.get("from_idx"), [])
+    return bool(column) and len(column) == count
+
+
+def _move_releases_low_card(state: dict, move: dict) -> bool:
+    if move.get("move_type") not in ("COL_TO_HOME", "COL_TO_FREE", "COL_TO_COL"):
+        return False
+    count = move.get("count", 1) or 1
+    column = _safe_get(state["columns"], move.get("from_idx"), [])
+    remaining = len(column) - count
+    if remaining <= 0:
+        return False
+    return _is_low_card(column[remaining - 1])
+
+
+def _move_reduces_buffer_space(state: dict, move: dict) -> bool:
+    before = _available_buffer_count(state)
+    after = before
+    move_type = move.get("move_type")
+
+    if move_type == "COL_TO_FREE":
+        after -= 1
+        if _move_empties_source_column(state, move):
+            after += 1
+    elif move_type == "FREE_TO_COL":
+        after += 1
+        if _destination_top_card(state, move) is None:
+            after -= 1
+    elif move_type == "COL_TO_COL":
+        if _destination_top_card(state, move) is None:
+            after -= 1
+        if _move_empties_source_column(state, move):
+            after += 1
+    elif move_type == "COL_TO_HOME":
+        if _move_empties_source_column(state, move):
+            after += 1
+    elif move_type == "FREE_TO_HOME":
+        after += 1
+
+    return after < before
+
+
+def _available_buffer_count(state: dict) -> int:
+    return sum(1 for card in state["free_cells"] if card is None) + sum(1 for column in state["columns"] if not column)
+
+
+def _move_targets_near_home_card(state: dict, move: dict, moving_card) -> bool:
+    if move.get("move_type") != "COL_TO_COL" or moving_card is None:
+        return False
+    next_value = _next_home_value(state["home_cells"], moving_card.get("suit"))
+    if next_value <= 0:
+        return False
+    return _card_value(moving_card) <= next_value + 2
 
 
 def _card_key(card: dict) -> tuple[str, int]:
