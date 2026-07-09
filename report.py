@@ -266,6 +266,7 @@ def _build_learned_policy_summary(seeds, model_path, dataset=None, device="auto"
             "win_rate": play_summary["win_rate"],
             "average_steps": play_summary["average_steps"],
             "average_home_cards": play_summary["average_home_cards"],
+            "results": [_to_plain_dict(result) for result in play_summary.get("results", [])],
         },
     }
 

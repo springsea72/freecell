@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import benchmark
+import learned_policy_eval
 import report
 
 
@@ -219,6 +220,63 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(0.5, result["learned_policy"]["dataset"]["accuracy"])
         self.assertEqual(0.5, result["learned_policy"]["play"]["win_rate"])
 
+    def test_build_report_with_model_preserves_learned_play_results(self):
+        play_result = learned_policy_eval.PlayResult(
+            seed=1,
+            policy="learned",
+            won=False,
+            steps=12,
+            reason="loop_detected",
+            home_cards=4,
+            visited_states=13,
+        )
+
+        with patch("report.benchmark.run_benchmark", return_value=[]), patch(
+            "report.benchmark.summarize",
+            return_value=benchmark.BenchmarkSummary(1, 0, 0.0, 0.1, 4.0, 0.0),
+        ), patch(
+            "report.policy_player.evaluate_seeds",
+            return_value={
+                "games": 1,
+                "won": 0,
+                "win_rate": 0.0,
+                "average_steps": 5.0,
+                "average_home_cards": 2.0,
+                "policy": "heuristic",
+                "results": [],
+            },
+        ), patch(
+            "learned_policy_eval.evaluate_seeds",
+            return_value={
+                "mode": "play",
+                "games": 1,
+                "won": 0,
+                "win_rate": 0.0,
+                "average_steps": 12.0,
+                "average_home_cards": 4.0,
+                "device": "cpu",
+                "model_path": "model.pt",
+                "results": [play_result],
+            },
+        ):
+            result = report.build_report([1], 1000, 100, model_path="model.pt", model_device="cpu")
+
+        learned_results = result["learned_policy"]["play"]["results"]
+        self.assertEqual(1, len(learned_results))
+        self.assertEqual(
+            {
+                "seed",
+                "policy",
+                "won",
+                "reason",
+                "steps",
+                "home_cards",
+                "visited_states",
+            },
+            set(learned_results[0]),
+        )
+        self.assertEqual("loop_detected", learned_results[0]["reason"])
+
     def test_render_text_and_json_include_learned_policy_metrics(self):
         data = {
             "solver": {
@@ -249,6 +307,17 @@ class ReportTests(unittest.TestCase):
                     "win_rate": 1 / 3,
                     "average_steps": 11.0,
                     "average_home_cards": 6.0,
+                    "results": [
+                        {
+                            "seed": 1,
+                            "policy": "learned",
+                            "won": False,
+                            "reason": "loop_detected",
+                            "steps": 10,
+                            "home_cards": 4,
+                            "visited_states": 11,
+                        }
+                    ],
                 },
             },
         }
@@ -259,8 +328,12 @@ class ReportTests(unittest.TestCase):
         self.assertIn("learned_policy", text)
         self.assertIn("accuracy: 0.500000", text)
         self.assertIn("win_rate: 0.333333", text)
+        self.assertNotIn("loop_detected", text)
+        self.assertNotIn("visited_states", text)
         self.assertEqual(2, rendered_json["learned_policy"]["dataset"]["samples"])
         self.assertEqual(3, rendered_json["learned_policy"]["play"]["games"])
+        self.assertEqual(1, len(rendered_json["learned_policy"]["play"]["results"]))
+        self.assertEqual("loop_detected", rendered_json["learned_policy"]["play"]["results"][0]["reason"])
 
     def test_learned_policy_dataset_skipped_without_dataset(self):
         learned = {
