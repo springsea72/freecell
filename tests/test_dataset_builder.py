@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import dataset_builder
 from game_model import Card, FreeCellGame, Move, MoveType, Suit
+from policy_features import features_from_sample
 from trace_io import move_to_dict
 
 
@@ -72,6 +73,91 @@ class DatasetBuilderTests(unittest.TestCase):
         self.assertEqual(2, len(samples))
         for sample in samples:
             self.assertEqual(sample["action"], sample["legal_moves"][sample["action_index"]])
+
+    def test_sample_from_state_includes_progress_for_home_move(self):
+        game = two_step_home_game()
+        sample = dataset_builder.sample_from_state(
+            game,
+            Move(MoveType.COL_TO_HOME, 0),
+            seed=123,
+            source_trace="seed_000123.json",
+            step_index=0,
+            remaining_moves=2,
+        )
+
+        self.assertEqual(
+            {
+                "home_cards": 50,
+                "home_cards_after": 51,
+                "home_delta": 1,
+                "remaining_moves": 2,
+                "remaining_moves_after": 1,
+                "won_after": False,
+            },
+            sample["progress"],
+        )
+
+    def test_progress_for_non_home_move_has_zero_home_delta(self):
+        game = FreeCellGame(deal=empty_deal())
+        game.columns[0] = [card(Suit.SPADES, 5)]
+        game.columns[1] = [card(Suit.HEARTS, 6)]
+        sample = dataset_builder.sample_from_state(
+            game,
+            Move(MoveType.COL_TO_COL, 0, 1),
+            seed=1,
+            source_trace="trace.json",
+            step_index=0,
+            remaining_moves=3,
+        )
+
+        self.assertEqual(0, sample["progress"]["home_cards"])
+        self.assertEqual(0, sample["progress"]["home_cards_after"])
+        self.assertEqual(0, sample["progress"]["home_delta"])
+        self.assertEqual(2, sample["progress"]["remaining_moves_after"])
+
+    def test_final_step_progress_marks_won_after(self):
+        with patch("dataset_builder.FreeCellGame", side_effect=lambda seed=None: two_step_home_game()):
+            samples = dataset_builder.samples_from_trace(solved_trace(), source_trace="seed_000123.json")
+
+        progress = samples[-1]["progress"]
+        self.assertEqual(51, progress["home_cards"])
+        self.assertEqual(52, progress["home_cards_after"])
+        self.assertEqual(1, progress["home_delta"])
+        self.assertEqual(1, progress["remaining_moves"])
+        self.assertEqual(0, progress["remaining_moves_after"])
+        self.assertTrue(progress["won_after"])
+
+    def test_progress_probe_does_not_mutate_original_game(self):
+        game = two_step_home_game()
+        before = game.state_key()
+        sample = dataset_builder.sample_from_state(
+            game,
+            Move(MoveType.COL_TO_HOME, 0),
+            seed=123,
+            source_trace="seed_000123.json",
+            step_index=0,
+            remaining_moves=2,
+        )
+
+        self.assertEqual(before, game.state_key())
+        self.assertEqual(50, dataset_builder.home_card_count(game))
+        self.assertEqual(51, sample["progress"]["home_cards_after"])
+
+    def test_features_from_sample_accepts_progress_field(self):
+        sample = dataset_builder.sample_from_state(
+            two_step_home_game(),
+            Move(MoveType.COL_TO_HOME, 0),
+            seed=123,
+            source_trace="seed_000123.json",
+            step_index=0,
+            remaining_moves=2,
+        )
+
+        state_features, move_features, action_index = features_from_sample(sample)
+
+        self.assertTrue(state_features)
+        self.assertTrue(move_features)
+        self.assertEqual(sample["action_index"], action_index)
 
     def test_sample_state_is_before_action(self):
         with patch("dataset_builder.FreeCellGame", side_effect=lambda seed=None: two_step_home_game()):

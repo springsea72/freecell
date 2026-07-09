@@ -36,17 +36,41 @@ def sample_from_state(game, action, seed, source_trace, step_index, remaining_mo
     except ValueError as exc:
         raise ValueError(f"action is not legal at step {step_index}: {action}") from exc
 
+    state = state_to_dict(game)
+    progress = progress_from_action(game, action, remaining_moves)
+
     return {
         "version": DATASET_VERSION,
         "source_trace": source_trace,
         "seed": seed,
         "step_index": step_index,
         "remaining_moves": remaining_moves,
-        "state": state_to_dict(game),
+        "state": state,
         "legal_moves": [move_to_dict(move) for move in legal_moves],
         "action": move_to_dict(action),
         "action_index": action_index,
+        "progress": progress,
     }
+
+
+def progress_from_action(game, action, remaining_moves) -> dict:
+    home_cards = home_card_count(game)
+    probe = game.clone()
+    if not probe.apply_move(action):
+        raise ValueError(f"failed to apply legal action on clone: {action}")
+    home_cards_after = home_card_count(probe)
+    return {
+        "home_cards": home_cards,
+        "home_cards_after": home_cards_after,
+        "home_delta": home_cards_after - home_cards,
+        "remaining_moves": remaining_moves,
+        "remaining_moves_after": max(remaining_moves - 1, 0),
+        "won_after": probe.is_won(),
+    }
+
+
+def home_card_count(game) -> int:
+    return sum(len(stack) for stack in game.home_cells.values())
 
 
 def samples_from_trace(trace, source_trace=None) -> list[dict]:
