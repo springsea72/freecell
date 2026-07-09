@@ -210,6 +210,8 @@ The 5.2 evaluation entry point is expected to be `learned_policy_eval.py`, with:
 - Execution only through `game.apply_move(move)`.
 - No GUI connection.
 
+Direct play evaluation may apply a small, explainable inference-time rerank over the model-scored legal moves to prefer home moves and resource-releasing moves when model scores are close. This rerank must not affect JSONL dataset accuracy, training, or dataset generation.
+
 ## 5.1 Implementation Notes
 
 The minimal 5.1 training loop is expected to live in separate optional modules:

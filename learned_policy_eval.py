@@ -5,9 +5,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import learned_policy
-from game_model import FreeCellGame
+from game_model import FreeCellGame, MoveType
 from policy_baseline import load_jsonl
 from policy_features import features_from_sample
+
+
+RERANK_ADJUSTMENT_LIMIT = 0.12
+HOME_MOVE_BONUS = 0.051
+LOW_CARD_RELEASE_BONUS = 0.02
+SOURCE_EMPTIED_BONUS = 0.015
+FREE_CELL_RELEASE_BONUS = 0.015
+NEAR_HOME_COLUMN_BONUS = 0.01
+ORDINARY_COL_TO_FREE_PENALTY = -0.051
+BUFFER_REDUCTION_PENALTY = -0.01
 
 
 @dataclass
@@ -114,13 +124,132 @@ def evaluate_seeds(seeds, model_path, max_steps=500, device="auto") -> dict:
 
 def _choose_non_looping_move(game, model_bundle, visited, device=None):
     scored_moves = learned_policy.score_legal_moves(game, model_bundle, device=device)
-    for move, _ in sorted(scored_moves, key=lambda item: item[1], reverse=True):
+    for move, _ in sorted(
+        scored_moves,
+        key=lambda item: _reranked_score(game, item[0], item[1]),
+        reverse=True,
+    ):
         probe = game.clone()
         if not probe.apply_move(move):
             continue
         if probe.state_key() not in visited:
             return move
     return None
+
+
+def _reranked_score(game, move, model_score: float) -> float:
+    return float(model_score) + _rerank_adjustment(game, move)
+
+
+def _rerank_adjustment(game, move) -> float:
+    adjustment = 0.0
+
+    if move.move_type in (MoveType.FREE_TO_HOME, MoveType.COL_TO_HOME):
+        adjustment += HOME_MOVE_BONUS
+    if _move_releases_low_card(game, move):
+        adjustment += LOW_CARD_RELEASE_BONUS
+    if _move_empties_source_column(game, move):
+        adjustment += SOURCE_EMPTIED_BONUS
+    if _move_releases_free_cell(game, move):
+        adjustment += FREE_CELL_RELEASE_BONUS
+    if move.move_type == MoveType.COL_TO_FREE and not (
+        _move_releases_low_card(game, move) or _move_empties_source_column(game, move)
+    ):
+        adjustment += ORDINARY_COL_TO_FREE_PENALTY
+    if _move_reduces_buffer_space(game, move):
+        adjustment += BUFFER_REDUCTION_PENALTY
+    if _move_targets_near_home_card(game, move):
+        adjustment += NEAR_HOME_COLUMN_BONUS
+
+    return max(-RERANK_ADJUSTMENT_LIMIT, min(RERANK_ADJUSTMENT_LIMIT, adjustment))
+
+
+def _move_empties_source_column(game, move) -> bool:
+    if move.move_type not in (MoveType.COL_TO_HOME, MoveType.COL_TO_FREE, MoveType.COL_TO_COL):
+        return False
+    column = _safe_column(game, move.from_idx)
+    return bool(column) and len(column) == move.count
+
+
+def _move_releases_low_card(game, move) -> bool:
+    if move.move_type not in (MoveType.COL_TO_HOME, MoveType.COL_TO_FREE, MoveType.COL_TO_COL):
+        return False
+    column = _safe_column(game, move.from_idx)
+    remaining = len(column) - move.count
+    if remaining <= 0:
+        return False
+    return 1 <= column[remaining - 1].value <= 3
+
+
+def _move_releases_free_cell(game, move) -> bool:
+    if move.move_type not in (MoveType.FREE_TO_HOME, MoveType.FREE_TO_COL):
+        return False
+    return 0 <= move.from_idx < len(game.free_cells) and game.free_cells[move.from_idx] is not None
+
+
+def _move_reduces_buffer_space(game, move) -> bool:
+    before = _available_buffer_count(game)
+    after = before
+
+    if move.move_type == MoveType.COL_TO_FREE:
+        after -= 1
+        if _move_empties_source_column(game, move):
+            after += 1
+    elif move.move_type == MoveType.FREE_TO_COL:
+        after += 1
+        if _target_column_is_empty(game, move):
+            after -= 1
+    elif move.move_type == MoveType.COL_TO_COL:
+        if _target_column_is_empty(game, move):
+            after -= 1
+        if _move_empties_source_column(game, move):
+            after += 1
+    elif move.move_type == MoveType.COL_TO_HOME:
+        if _move_empties_source_column(game, move):
+            after += 1
+    elif move.move_type == MoveType.FREE_TO_HOME:
+        after += 1
+
+    return after < before
+
+
+def _move_targets_near_home_card(game, move) -> bool:
+    if move.move_type != MoveType.COL_TO_COL:
+        return False
+    moving_card = _moving_card(game, move)
+    if moving_card is None:
+        return False
+    next_home_value = len(game.home_cells[moving_card.suit]) + 1
+    return moving_card.value <= next_home_value + 2
+
+
+def _moving_card(game, move):
+    if move.move_type in (MoveType.COL_TO_HOME, MoveType.COL_TO_FREE, MoveType.COL_TO_COL):
+        column = _safe_column(game, move.from_idx)
+        if not column or len(column) < move.count:
+            return None
+        return column[-move.count]
+    if move.move_type in (MoveType.FREE_TO_HOME, MoveType.FREE_TO_COL):
+        if 0 <= move.from_idx < len(game.free_cells):
+            return game.free_cells[move.from_idx]
+    return None
+
+
+def _target_column_is_empty(game, move) -> bool:
+    if move.to_idx is None:
+        return False
+    column = _safe_column(game, move.to_idx)
+    return column == []
+
+
+def _available_buffer_count(game) -> int:
+    return sum(1 for card in game.free_cells if card is None) + sum(1 for column in game.columns if not column)
+
+
+def _safe_column(game, index):
+    if not isinstance(index, int) or index < 0 or index >= len(game.columns):
+        return []
+    return game.columns[index]
 
 
 def _result(seed, won, steps, reason, game, visited):

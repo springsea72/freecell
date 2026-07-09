@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import learned_policy_eval
 import solver
-from game_model import FreeCellGame, Move, MoveType
+from game_model import Card, FreeCellGame, Move, MoveType, Suit
 
 
 try:
@@ -35,6 +35,14 @@ def sample(action_index=1):
         "action": legal_moves[action_index],
         "action_index": action_index,
     }
+
+
+def card(suit, value):
+    return Card(suit, value)
+
+
+def empty_deal():
+    return [[] for _ in range(8)]
 
 
 class RecordingGame:
@@ -125,6 +133,18 @@ class LearnedPolicyEvalTests(unittest.TestCase):
         self.assertEqual(1, summary["correct"])
         self.assertEqual(0.5, summary["accuracy"])
 
+    def test_dataset_accuracy_does_not_use_direct_play_rerank(self):
+        samples = [sample(action_index=1)]
+        bundle = type("Bundle", (), {"device": "cpu"})()
+
+        with patch("learned_policy_eval.score_sample_moves", return_value=[0.9, 0.1]), patch(
+            "learned_policy_eval._reranked_score",
+            side_effect=AssertionError("dataset evaluation must not use rerank"),
+        ):
+            summary = learned_policy_eval.evaluate_samples(samples, model_bundle=bundle)
+
+        self.assertEqual(0.0, summary["accuracy"])
+
     def test_play_uses_generate_legal_moves_and_apply_move(self):
         with patch("learned_policy_eval.FreeCellGame", RecordingGame), patch(
             "learned_policy.score_legal_moves",
@@ -176,6 +196,41 @@ class LearnedPolicyEvalTests(unittest.TestCase):
 
         self.assertEqual(legal_move, selected)
         self.assertEqual(before, game.state_key())
+
+    def test_choose_non_looping_prefers_home_move_when_scores_are_close(self):
+        game = FreeCellGame(deal=empty_deal())
+        game.columns[0] = [card(Suit.SPADES, 1)]
+        home_move = Move(MoveType.COL_TO_HOME, 0)
+        free_move = Move(MoveType.COL_TO_FREE, 0, 0)
+
+        with patch("learned_policy.score_legal_moves", return_value=[(free_move, 1.0), (home_move, 0.95)]):
+            selected = learned_policy_eval._choose_non_looping_move(game, object(), visited={game.state_key()})
+
+        self.assertEqual(home_move, selected)
+
+    def test_choose_non_looping_avoids_ordinary_col_to_free_when_scores_are_close(self):
+        game = FreeCellGame(deal=empty_deal())
+        game.columns[0] = [card(Suit.DIAMONDS, 9), card(Suit.SPADES, 5)]
+        game.columns[1] = [card(Suit.HEARTS, 6)]
+        free_move = Move(MoveType.COL_TO_FREE, 0, 0)
+        col_move = Move(MoveType.COL_TO_COL, 0, 1)
+
+        with patch("learned_policy.score_legal_moves", return_value=[(free_move, 1.0), (col_move, 0.95)]):
+            selected = learned_policy_eval._choose_non_looping_move(game, object(), visited={game.state_key()})
+
+        self.assertEqual(col_move, selected)
+
+    def test_choose_non_looping_respects_clear_model_score_lead(self):
+        game = FreeCellGame(deal=empty_deal())
+        game.columns[0] = [card(Suit.DIAMONDS, 9), card(Suit.SPADES, 5)]
+        game.columns[1] = [card(Suit.HEARTS, 6)]
+        free_move = Move(MoveType.COL_TO_FREE, 0, 0)
+        col_move = Move(MoveType.COL_TO_COL, 0, 1)
+
+        with patch("learned_policy.score_legal_moves", return_value=[(free_move, 1.5), (col_move, 0.95)]):
+            selected = learned_policy_eval._choose_non_looping_move(game, object(), visited={game.state_key()})
+
+        self.assertEqual(free_move, selected)
 
     def test_cli_missing_model_returns_nonzero(self):
         stderr = io.StringIO()
