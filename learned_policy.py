@@ -12,8 +12,10 @@ from policy_features import (
 from trace_io import move_to_dict
 
 
-MODEL_TYPE = "candidate_mlp_v1"
+MODEL_TYPE = "candidate_mlp_v2"
 DEFAULT_HIDDEN_SIZE = 64
+DEFAULT_PROGRESS_LOSS_WEIGHT = 0.1
+AUXILIARY_TARGETS = ("progress_value",)
 
 
 @dataclass
@@ -65,17 +67,24 @@ def create_model(hidden_size=DEFAULT_HIDDEN_SIZE, torch=None):
     return torch.nn.Sequential(
         torch.nn.Linear(input_size, hidden_size),
         torch.nn.ReLU(),
-        torch.nn.Linear(hidden_size, 1),
+        torch.nn.Linear(hidden_size, 2),
     )
 
 
-def base_metadata(seed=None, hidden_size=DEFAULT_HIDDEN_SIZE, training_args=None) -> dict:
+def base_metadata(
+    seed=None,
+    hidden_size=DEFAULT_HIDDEN_SIZE,
+    training_args=None,
+    progress_loss_weight=DEFAULT_PROGRESS_LOSS_WEIGHT,
+) -> dict:
     return {
         "feature_version": FEATURE_VERSION,
         "state_feature_size": STATE_FEATURE_SIZE,
         "move_feature_size": MOVE_FEATURE_SIZE,
         "model_type": MODEL_TYPE,
         "hidden_size": hidden_size,
+        "auxiliary_targets": list(AUXILIARY_TARGETS),
+        "progress_loss_weight": progress_loss_weight,
         "seed": seed,
         "training_args": training_args or {},
     }
@@ -100,8 +109,23 @@ def score_legal_moves(game, model_bundle: ModelBundle, device=None) -> list[tupl
     model = model_bundle.model.to(resolved_device)
     model.eval()
     with torch.no_grad():
-        scores = model(model_input).view(-1).detach().cpu().tolist()
+        outputs = model(model_input)
+        scores = action_scores_from_output(outputs).view(-1).detach().cpu().tolist()
     return list(zip(legal_moves, [float(score) for score in scores]))
+
+
+def action_scores_from_output(outputs):
+    if outputs.dim() == 1:
+        return outputs
+    return outputs[:, 0]
+
+
+def progress_scores_from_output(outputs):
+    if outputs.dim() == 1:
+        return None
+    if outputs.size(-1) < 2:
+        return None
+    return outputs[:, 1]
 
 
 def choose_action(game, model_bundle: ModelBundle, device=None) -> Move:

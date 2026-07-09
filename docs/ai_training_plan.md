@@ -99,6 +99,7 @@ Recommended first architecture:
 - Encode state into a fixed numeric vector.
 - Encode each candidate move into a fixed numeric vector.
 - Score each candidate independently with a small MLP over `[state_features, move_features]`.
+- Current `candidate_mlp_v2` emits an `action_score` head for legal-move ranking and a `progress_value` auxiliary head trained from optional `progress` labels.
 - Apply an action mask over the candidate list and choose the highest legal score.
 
 This keeps the output space dynamic and naturally tied to legal moves.
@@ -235,6 +236,8 @@ The minimal 5.1 training loop is expected to live in separate optional modules:
 Normal project commands must continue to work without installing `requirements-ml.txt`. Future evaluation tooling should import model code only when explicitly evaluating a learned policy.
 
 The current minimal trainer exposes `--hidden-size`, `--batch-size`, `--lr`, `--validation-split`, `--seed`, and `--device`. `hidden_size` is stored in model metadata so saved checkpoints can be loaded with the same architecture, and `batch_size` controls optimizer step frequency through batch loss accumulation.
+
+The trainer also exposes `--progress-loss-weight`, defaulting to `0.1`. When JSONL rows include `progress`, training adds a small auxiliary MSE loss for the `progress_value` head while preserving action cross entropy as the primary objective. Setting the weight to `0` keeps the old action-only optimization behavior, while metadata still records the auxiliary target configuration.
 
 The experiment orchestrator writes all generated traces, datasets, models, reports, and `manifest.json` under the requested output directory. The manifest records experiment parameters, seed range, solved trace count, dataset sample count, generated paths, and training summary. These generated artifacts remain ignored by git.
 

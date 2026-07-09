@@ -71,7 +71,9 @@ def score_sample_moves(sample, model_bundle, device=None) -> list[float]:
     model = model_bundle.model.to(resolved_device)
     model.eval()
     with torch.no_grad():
-        return [float(score) for score in model(model_input).view(-1).detach().cpu().tolist()]
+        outputs = model(model_input)
+        scores = learned_policy.action_scores_from_output(outputs).view(-1).detach().cpu().tolist()
+        return [float(score) for score in scores]
 
 
 def play_game(seed, model_bundle, max_steps=500, device=None) -> PlayResult:
