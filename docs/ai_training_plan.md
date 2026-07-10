@@ -9,6 +9,7 @@ This document freezes the first AI policy training design before any training co
 - Solver: `solver.py` provides bounded heuristic search and returns `SolveResult` with a replayable move path and search statistics. It does not modify the input game.
 - Trace I/O: `trace_io.py`, `autoplay.py`, and `replay.py` save, load, and verify solved JSON traces from reproducible seeds.
 - Dataset builder: `dataset_builder.py` converts solved traces into JSONL samples. Each sample captures the pre-action state, legal action set, trace action, and `action_index`.
+- Comparison dataset builder: `comparison_dataset_builder.py` converts solved-trace JSONL samples into pairwise records where the trace action is preferred over sampled non-trace legal actions.
 - Baselines: `policy_baseline.py` evaluates non-trained `first_legal` and hand-written `heuristic` policies on JSONL samples.
 - Policy player: `policy_player.py` runs baseline policies directly in `FreeCellGame(seed=...)`, with loop detection and max-step limits.
 - Report: `report.py` aggregates solver benchmark, JSONL policy accuracy, and direct policy-player metrics.
@@ -50,6 +51,8 @@ Each JSONL row is one decision point from a solved trace.
 Training must use an action mask. The model may score candidate moves, but the final action must always be selected from `legal_moves`. It must never emit an arbitrary move outside `game.generate_legal_moves()`.
 
 The `progress` field is additive. Existing JSONL rows without it remain valid for the current feature extraction and imitation trainer.
+
+Pairwise comparison rows are a separate optional dataset derived from the JSONL rows above. They keep the same pre-action `state`, copy `progress` when available, and store `preferred_action` as the trace action with `rejected_action` sampled from the same `legal_moves`. This does not change the original dataset schema or current trainer.
 
 Invalid samples should be rejected during dataset loading or smoke validation:
 
