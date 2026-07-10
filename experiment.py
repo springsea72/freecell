@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import comparison_dataset_builder
 from dataset_builder import build_dataset
 from game_model import FreeCellGame
 import report
@@ -31,6 +32,8 @@ def parse_args(argv=None):
         type=float,
         default=train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
     )
+    parser.add_argument("--comparison-negatives-per-sample", type=int, default=0)
+    parser.add_argument("--comparison-loss-weight", type=float, default=0.0)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -55,6 +58,10 @@ def parse_args(argv=None):
         parser.error("--hidden-size must be positive")
     if args.progress_loss_weight < 0:
         parser.error("--progress-loss-weight must be non-negative")
+    if args.comparison_negatives_per_sample < 0:
+        parser.error("--comparison-negatives-per-sample must be non-negative")
+    if args.comparison_loss_weight < 0:
+        parser.error("--comparison-loss-weight must be non-negative")
     if args.lr <= 0:
         parser.error("--lr must be positive")
     if args.validation_split < 0 or args.validation_split >= 1:
@@ -73,6 +80,7 @@ def run_experiment(args) -> dict:
     trace_dir = output_dir / "traces"
     model_dir = output_dir / "models"
     dataset_path = output_dir / "dataset.jsonl"
+    comparison_dataset_path = output_dir / "comparison_dataset.jsonl"
     model_path = model_dir / "policy.pt"
     report_text_path = output_dir / "report.txt"
     report_json_path = output_dir / "report.json"
@@ -85,6 +93,7 @@ def run_experiment(args) -> dict:
         output_dir,
         trace_dir,
         dataset_path,
+        comparison_dataset_path,
         model_path,
         report_text_path,
         report_json_path,
@@ -106,14 +115,31 @@ def run_experiment(args) -> dict:
     if samples <= 0:
         raise RuntimeError("dataset stage failed: no samples written")
 
+    comparison_summary = {
+        "samples_read": 0,
+        "pairs_written": 0,
+        "skipped_no_negative": 0,
+    }
+    train_comparison_dataset = None
+    if args.comparison_negatives_per_sample > 0:
+        comparison_summary = comparison_dataset_builder.build_comparison_dataset(
+            dataset_path,
+            comparison_dataset_path,
+            negatives_per_sample=args.comparison_negatives_per_sample,
+            seed=args.training_seed,
+        )
+        train_comparison_dataset = comparison_dataset_path
+
     train_summary = train_policy.train(
         SimpleNamespace(
             dataset=dataset_path,
+            comparison_dataset=train_comparison_dataset,
             output=model_path,
             epochs=args.epochs,
             batch_size=args.batch_size,
             hidden_size=args.hidden_size,
             progress_loss_weight=args.progress_loss_weight,
+            comparison_loss_weight=args.comparison_loss_weight,
             lr=args.lr,
             seed=args.training_seed,
             device=args.device,
@@ -146,6 +172,10 @@ def run_experiment(args) -> dict:
         "device": train_summary["device"],
         "train_accuracy": train_summary["train_accuracy"],
         "validation_accuracy": train_summary["validation_accuracy"],
+        "comparison_samples": comparison_summary["pairs_written"],
+        "comparison_loss": train_summary.get("comparison_loss", 0.0),
+        "comparison_accuracy": train_summary.get("comparison_accuracy", 0.0),
+        "comparison_dataset_path": None if train_comparison_dataset is None else str(train_comparison_dataset),
         "trace_dir": str(trace_dir),
         "dataset_path": str(dataset_path),
         "output_dir": str(output_dir),
@@ -156,6 +186,8 @@ def run_experiment(args) -> dict:
         seeds=seeds,
         solved_trace_paths=solved_trace_paths,
         dataset_path=dataset_path,
+        comparison_dataset_path=train_comparison_dataset,
+        comparison_summary=comparison_summary,
         model_path=model_path,
         report_paths=report_paths,
         train_summary=train_summary,
@@ -194,6 +226,8 @@ def _write_manifest(
     seeds: list[int],
     solved_trace_paths: list[Path],
     dataset_path: Path,
+    comparison_dataset_path,
+    comparison_summary: dict,
     model_path: Path,
     report_paths: list[Path],
     train_summary: dict,
@@ -209,6 +243,8 @@ def _write_manifest(
             "batch_size": args.batch_size,
             "hidden_size": args.hidden_size,
             "progress_loss_weight": args.progress_loss_weight,
+            "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
+            "comparison_loss_weight": args.comparison_loss_weight,
             "lr": args.lr,
             "device": args.device,
             "validation_split": args.validation_split,
@@ -232,9 +268,13 @@ def _write_manifest(
             "device": summary["device"],
             "train_accuracy": summary["train_accuracy"],
             "validation_accuracy": summary["validation_accuracy"],
+            "comparison_samples": summary["comparison_samples"],
+            "comparison_loss": summary["comparison_loss"],
+            "comparison_accuracy": summary["comparison_accuracy"],
         },
         "paths": {
             "dataset": str(dataset_path),
+            "comparison_dataset": None if comparison_dataset_path is None else str(comparison_dataset_path),
             "model": str(model_path),
             "reports": [str(path) for path in report_paths],
             "traces": [str(path) for path in solved_trace_paths],
@@ -244,6 +284,10 @@ def _write_manifest(
             "batch_size": args.batch_size,
             "hidden_size": args.hidden_size,
             "progress_loss_weight": args.progress_loss_weight,
+            "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
+            "comparison_loss_weight": args.comparison_loss_weight,
+            "comparison_dataset": None if comparison_dataset_path is None else str(comparison_dataset_path),
+            "comparison_samples": comparison_summary["pairs_written"],
             "lr": args.lr,
             "validation_split": args.validation_split,
             "device": summary["device"],
@@ -251,6 +295,7 @@ def _write_manifest(
             "seed": args.training_seed,
         },
         "train_summary": train_summary,
+        "comparison_summary": comparison_summary,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -280,6 +325,9 @@ def print_summary(summary) -> None:
         "device",
         "train_accuracy",
         "validation_accuracy",
+        "comparison_samples",
+        "comparison_loss",
+        "comparison_accuracy",
     ):
         value = summary[key]
         if isinstance(value, float):

@@ -46,6 +46,34 @@ def tiny_sample_without_progress():
     return sample
 
 
+def comparison_pair():
+    sample = tiny_sample()
+    rejected_index = next(index for index in range(len(sample["legal_moves"])) if index != sample["action_index"])
+    return {
+        "version": 1,
+        "source_sample": "trace.json:0",
+        "seed": sample["seed"],
+        "step_index": sample["step_index"],
+        "state": sample["state"],
+        "preferred_action": sample["action"],
+        "rejected_action": sample["legal_moves"][rejected_index],
+        "preferred_action_index": sample["action_index"],
+        "rejected_action_index": rejected_index,
+        "reason": "trace_action_vs_non_trace",
+        "progress": sample["progress"],
+    }
+
+
+def write_jsonl_file(path, rows):
+    path.write_text("".join(json_line(row) for row in rows), encoding="utf-8")
+
+
+def json_line(row):
+    import json
+
+    return json.dumps(row, sort_keys=True) + "\n"
+
+
 class TrainPolicyTests(unittest.TestCase):
     def test_cli_missing_dataset_returns_nonzero(self):
         stderr = io.StringIO()
@@ -239,6 +267,145 @@ class TrainPolicyTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertTrue(output_exists)
         self.assertIn("progress_loss: 0.000000", stdout.getvalue())
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_no_comparison_dataset_keeps_comparison_metrics_zero(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+            args = type(
+                "Args",
+                (),
+                {
+                    "dataset": dataset,
+                    "comparison_dataset": None,
+                    "output": output,
+                    "epochs": 1,
+                    "batch_size": 1,
+                    "hidden_size": 16,
+                    "lr": 0.001,
+                    "seed": 123,
+                    "device": "cpu",
+                    "validation_split": 0,
+                    "progress_loss_weight": 0.1,
+                    "comparison_loss_weight": 0.1,
+                },
+            )()
+
+            summary = train_policy.train(args)
+
+        self.assertEqual(0, summary["comparison_samples"])
+        self.assertEqual(0.0, summary["comparison_loss"])
+        self.assertEqual(0.0, summary["comparison_accuracy"])
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_comparison_dataset_computes_loss_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            comparison_dataset = Path(tmpdir) / "pairs.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+            write_jsonl_file(comparison_dataset, [comparison_pair()])
+            args = type(
+                "Args",
+                (),
+                {
+                    "dataset": dataset,
+                    "comparison_dataset": comparison_dataset,
+                    "output": output,
+                    "epochs": 1,
+                    "batch_size": 1,
+                    "hidden_size": 16,
+                    "lr": 0.001,
+                    "seed": 123,
+                    "device": "cpu",
+                    "validation_split": 0,
+                    "progress_loss_weight": 0.1,
+                    "comparison_loss_weight": 0.1,
+                },
+            )()
+
+            summary = train_policy.train(args)
+            bundle = learned_policy.load_model(output, device="cpu")
+
+        self.assertEqual(1, summary["comparison_samples"])
+        self.assertGreaterEqual(summary["comparison_loss"], 0.0)
+        self.assertGreaterEqual(summary["comparison_accuracy"], 0.0)
+        self.assertEqual(0.1, summary["comparison_loss_weight"])
+        self.assertEqual(0.1, bundle.metadata["comparison_loss_weight"])
+        self.assertEqual(["trace_action_preferred_over_sampled_legal_move"], bundle.metadata["comparison_targets"])
+        self.assertEqual(0.1, bundle.metadata["training_args"]["comparison_loss_weight"])
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_comparison_loss_uses_action_score_only(self):
+        class FixedOutputModel:
+            def __call__(self, model_input):
+                return torch.tensor(
+                    [
+                        [0.0, 100.0],
+                        [1.0, -100.0],
+                    ],
+                    dtype=torch.float32,
+                    device=model_input.device,
+                )
+
+        loss, is_correct = train_policy._comparison_loss(
+            FixedOutputModel(),
+            comparison_pair(),
+            torch.device("cpu"),
+            torch,
+        )
+
+        self.assertGreater(float(loss.detach().cpu()), 0.0)
+        self.assertFalse(is_correct)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_comparison_accuracy_uses_preferred_greater_than_rejected(self):
+        class FixedOutputModel:
+            def eval(self):
+                return None
+
+            def __call__(self, model_input):
+                return torch.tensor(
+                    [
+                        [2.0, -100.0],
+                        [1.0, 100.0],
+                    ],
+                    dtype=torch.float32,
+                    device=model_input.device,
+                )
+
+        _, accuracy = train_policy._evaluate_comparison_samples(
+            FixedOutputModel(),
+            [comparison_pair()],
+            torch.device("cpu"),
+            torch,
+        )
+
+        self.assertEqual(1.0, accuracy)
+
+    def test_cli_rejects_negative_comparison_loss_weight(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                exit_code = train_policy.main(
+                    [
+                        "--dataset",
+                        str(dataset),
+                        "--output",
+                        str(output),
+                        "--comparison-loss-weight",
+                        "-0.1",
+                    ]
+                )
+
+        self.assertEqual(1, exit_code)
+        self.assertIn("comparison-loss-weight", stderr.getvalue())
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
     def test_run_epoch_uses_batch_size_for_optimizer_steps(self):

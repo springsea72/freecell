@@ -5,7 +5,10 @@ import sys
 from pathlib import Path
 
 import learned_policy
-from policy_features import features_from_sample
+from policy_features import features_from_sample, features_from_state_and_moves
+
+
+COMPARISON_TARGETS = ("trace_action_preferred_over_sampled_legal_move",)
 
 
 def load_samples(path) -> list[dict]:
@@ -23,6 +26,24 @@ def load_samples(path) -> list[dict]:
             samples.append(sample)
     if not samples:
         raise ValueError("dataset contains no samples")
+    return samples
+
+
+def load_comparison_samples(path) -> list[dict]:
+    if path is None:
+        return []
+    samples = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pair = json.loads(line)
+                comparison_features_from_pair(pair)
+            except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError(f"invalid comparison sample at line {line_number}: {exc}") from exc
+            samples.append(pair)
     return samples
 
 
@@ -62,14 +83,24 @@ def train(args) -> dict:
         raise ValueError("batch_size must be >= 1")
     if progress_loss_weight < 0:
         raise ValueError("progress_loss_weight must be >= 0")
+    comparison_dataset = getattr(args, "comparison_dataset", None)
+    comparison_loss_weight = getattr(args, "comparison_loss_weight", 0.0)
+    if comparison_loss_weight < 0:
+        raise ValueError("comparison_loss_weight must be >= 0")
+    comparison_samples = load_comparison_samples(comparison_dataset) if comparison_dataset else []
+
     model = learned_policy.create_model(hidden_size=hidden_size, torch=torch).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     train_loss = 0.0
     train_accuracy = 0.0
     progress_loss = 0.0
+    comparison_loss = 0.0
+    comparison_accuracy = 0.0
     for epoch in range(args.epochs):
         random.Random(args.seed + epoch).shuffle(train_samples)
+        if comparison_samples:
+            random.Random(args.seed + epoch).shuffle(comparison_samples)
         train_loss, train_accuracy, progress_loss = _run_epoch(
             model,
             train_samples,
@@ -78,9 +109,13 @@ def train(args) -> dict:
             torch,
             batch_size=batch_size,
             progress_loss_weight=progress_loss_weight,
+            comparison_samples=comparison_samples,
+            comparison_loss_weight=comparison_loss_weight,
         )
 
     validation_accuracy = _evaluate(model, validation_samples, device, torch) if validation_samples else 0.0
+    if comparison_samples:
+        comparison_loss, comparison_accuracy = _evaluate_comparison_samples(model, comparison_samples, device, torch)
 
     metadata = learned_policy.base_metadata(
         seed=args.seed,
@@ -92,11 +127,16 @@ def train(args) -> dict:
             "hidden_size": hidden_size,
             "lr": args.lr,
             "progress_loss_weight": progress_loss_weight,
+            "comparison_dataset": None if comparison_dataset is None else str(comparison_dataset),
+            "comparison_loss_weight": comparison_loss_weight,
+            "comparison_targets": list(COMPARISON_TARGETS),
             "validation_split": args.validation_split,
             "device": str(device),
             "batch_accumulation": True,
         },
     )
+    metadata["comparison_loss_weight"] = comparison_loss_weight
+    metadata["comparison_targets"] = list(COMPARISON_TARGETS)
     learned_policy.save_model(args.output, model, metadata)
 
     return {
@@ -111,13 +151,27 @@ def train(args) -> dict:
         "train_loss": train_loss,
         "progress_loss": progress_loss,
         "progress_loss_weight": progress_loss_weight,
+        "comparison_samples": len(comparison_samples),
+        "comparison_loss": comparison_loss,
+        "comparison_accuracy": comparison_accuracy,
+        "comparison_loss_weight": comparison_loss_weight,
         "train_accuracy": train_accuracy,
         "validation_accuracy": validation_accuracy,
         "model_path": str(args.output),
     }
 
 
-def _run_epoch(model, samples, optimizer, device, torch, batch_size=1, progress_loss_weight=0.0):
+def _run_epoch(
+    model,
+    samples,
+    optimizer,
+    device,
+    torch,
+    batch_size=1,
+    progress_loss_weight=0.0,
+    comparison_samples=None,
+    comparison_loss_weight=0.0,
+):
     model.train()
     total_loss = 0.0
     total_progress_loss = 0.0
@@ -135,6 +189,10 @@ def _run_epoch(model, samples, optimizer, device, torch, batch_size=1, progress_
             torch,
             progress_loss_weight=progress_loss_weight,
         )
+        if comparison_samples and comparison_loss_weight > 0:
+            pair = comparison_samples[(sample_index - 1) % len(comparison_samples)]
+            pair_loss, _ = _comparison_loss(model, pair, device, torch)
+            loss = loss + comparison_loss_weight * pair_loss
         pending_losses.append(loss)
         total_loss += float(loss.detach().cpu())
         if progress_loss is not None:
@@ -164,6 +222,20 @@ def _evaluate(model, samples, device, torch) -> float:
     return correct / len(samples)
 
 
+def _evaluate_comparison_samples(model, samples, device, torch) -> tuple[float, float]:
+    if not samples:
+        return 0.0, 0.0
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    with torch.no_grad():
+        for sample in samples:
+            loss, is_correct = _comparison_loss(model, sample, device, torch)
+            total_loss += float(loss.detach().cpu())
+            correct += int(is_correct)
+    return total_loss / len(samples), correct / len(samples)
+
+
 def _sample_loss(model, sample, device, torch, compute_loss=True, progress_loss_weight=0.0):
     state_features, move_features, action_index = features_from_sample(sample)
     state_tensor = torch.tensor(state_features, dtype=torch.float32, device=device)
@@ -184,6 +256,28 @@ def _sample_loss(model, sample, device, torch, compute_loss=True, progress_loss_
         loss = torch.tensor(0.0, device=device)
     progress_loss_value = None if progress_loss is None else float(progress_loss.detach().cpu())
     return loss, predicted, action_index, progress_loss_value
+
+
+def _comparison_loss(model, pair, device, torch):
+    state_features, preferred_features, rejected_features = comparison_features_from_pair(pair)
+    state_tensor = torch.tensor(state_features, dtype=torch.float32, device=device)
+    move_tensor = torch.tensor([preferred_features, rejected_features], dtype=torch.float32, device=device)
+    state_batch = state_tensor.unsqueeze(0).repeat(2, 1)
+    model_input = torch.cat([state_batch, move_tensor], dim=1)
+    outputs = model(model_input)
+    action_scores = learned_policy.action_scores_from_output(outputs)
+    score_diff = action_scores[0] - action_scores[1]
+    target = torch.ones((), dtype=torch.float32, device=device)
+    loss = torch.nn.functional.binary_cross_entropy_with_logits(score_diff, target)
+    return loss, bool(score_diff.detach().cpu().item() > 0)
+
+
+def comparison_features_from_pair(pair):
+    state_features, move_features = features_from_state_and_moves(
+        pair["state"],
+        [pair["preferred_action"], pair["rejected_action"]],
+    )
+    return state_features, move_features[0], move_features[1]
 
 
 def _progress_loss(outputs, sample, action_index, device, torch):
@@ -234,6 +328,8 @@ def parse_args(argv=None):
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--hidden-size", type=int, default=learned_policy.DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--progress-loss-weight", type=float, default=learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT)
+    parser.add_argument("--comparison-dataset")
+    parser.add_argument("--comparison-loss-weight", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -258,6 +354,12 @@ def main(argv=None):
     if args.progress_loss_weight < 0:
         print("progress-loss-weight must be >= 0", file=sys.stderr)
         return 1
+    if args.comparison_loss_weight < 0:
+        print("comparison-loss-weight must be >= 0", file=sys.stderr)
+        return 1
+    if args.comparison_dataset is not None and not Path(args.comparison_dataset).exists():
+        print(f"comparison dataset does not exist: {args.comparison_dataset}", file=sys.stderr)
+        return 1
 
     try:
         summary = train(args)
@@ -277,6 +379,10 @@ def main(argv=None):
         "train_loss",
         "progress_loss",
         "progress_loss_weight",
+        "comparison_samples",
+        "comparison_loss",
+        "comparison_accuracy",
+        "comparison_loss_weight",
         "train_accuracy",
         "validation_accuracy",
         "model_path",

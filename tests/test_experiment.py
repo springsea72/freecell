@@ -21,6 +21,8 @@ def args(output_dir, **overrides):
         "batch_size": 1,
         "hidden_size": 64,
         "progress_loss_weight": train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
+        "comparison_negatives_per_sample": 0,
+        "comparison_loss_weight": 0.0,
         "lr": 0.001,
         "device": "cpu",
         "validation_split": 0.0,
@@ -89,6 +91,36 @@ class ExperimentTests(unittest.TestCase):
                 ]
             )
 
+    def test_parse_rejects_negative_comparison_negatives(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            experiment.parse_args(
+                [
+                    "--seed-start",
+                    "1",
+                    "--seed-count",
+                    "1",
+                    "--comparison-negatives-per-sample",
+                    "-1",
+                    "--output-dir",
+                    "out",
+                ]
+            )
+
+    def test_parse_rejects_negative_comparison_loss_weight(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            experiment.parse_args(
+                [
+                    "--seed-start",
+                    "1",
+                    "--seed-count",
+                    "1",
+                    "--comparison-loss-weight",
+                    "-0.1",
+                    "--output-dir",
+                    "out",
+                ]
+            )
+
     def test_parse_requires_output_dir(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             experiment.parse_args(["--seed-start", "1", "--seed-count", "1"])
@@ -127,6 +159,8 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(64, train_args.hidden_size)
             self.assertEqual(1, train_args.batch_size)
             self.assertEqual(0.1, train_args.progress_loss_weight)
+            self.assertIsNone(train_args.comparison_dataset)
+            self.assertEqual(0.0, train_args.comparison_loss_weight)
             self.assertEqual(0.001, train_args.lr)
             self.assertEqual(0.0, train_args.validation_split)
             return {
@@ -137,6 +171,10 @@ class ExperimentTests(unittest.TestCase):
                 "batch_size": train_args.batch_size,
                 "hidden_size": train_args.hidden_size,
                 "progress_loss_weight": train_args.progress_loss_weight,
+                "comparison_samples": 0,
+                "comparison_loss": 0.0,
+                "comparison_accuracy": 0.0,
+                "comparison_loss_weight": train_args.comparison_loss_weight,
                 "lr": train_args.lr,
                 "device": "cpu",
                 "train_accuracy": 0.25,
@@ -161,10 +199,11 @@ class ExperimentTests(unittest.TestCase):
                 "experiment.report.build_report", side_effect=fake_build_report
             ), patch(
                 "experiment.report.render_json", return_value="{}"
-            ):
+            ), patch("experiment.comparison_dataset_builder.build_comparison_dataset") as build_comparison:
                 summary = experiment.run_experiment(args(output_dir))
 
             self.assertEqual(["trace", "trace", "dataset", "train", "report"], calls)
+            build_comparison.assert_not_called()
             self.assertEqual(2, summary["seeds"])
             self.assertEqual(2, summary["solved_traces"])
             self.assertEqual(3, summary["samples"])
@@ -187,6 +226,12 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(0.1, manifest["parameters"]["progress_loss_weight"])
             self.assertEqual(0.1, manifest["training"]["progress_loss_weight"])
             self.assertEqual(0.1, manifest["train_summary"]["progress_loss_weight"])
+            self.assertEqual(0, manifest["parameters"]["comparison_negatives_per_sample"])
+            self.assertEqual(0.0, manifest["parameters"]["comparison_loss_weight"])
+            self.assertIsNone(manifest["paths"]["comparison_dataset"])
+            self.assertEqual(0, manifest["summary"]["comparison_samples"])
+            self.assertEqual(0, manifest["training"]["comparison_samples"])
+            self.assertEqual(0.0, manifest["training"]["comparison_loss_weight"])
             self.assertEqual(0.001, manifest["training"]["lr"])
             self.assert_path_under(manifest["paths"]["dataset"], output_dir)
             self.assert_path_under(manifest["paths"]["model"], output_dir)
@@ -194,6 +239,51 @@ class ExperimentTests(unittest.TestCase):
                 self.assert_path_under(report_path, output_dir)
             for trace_path in manifest["paths"]["traces"]:
                 self.assert_path_under(trace_path, output_dir)
+
+    def test_comparison_dataset_is_generated_and_passed_to_train(self):
+        solved = SolveResult(True, [], 1, 0, 0, "won")
+
+        def fake_train(train_args):
+            self.assert_path_under(train_args.comparison_dataset, output_dir)
+            self.assertEqual(0.25, train_args.comparison_loss_weight)
+            return {
+                "device": "cpu",
+                "train_accuracy": 0.25,
+                "validation_accuracy": 0.5,
+                "comparison_loss": 0.7,
+                "comparison_accuracy": 0.6,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "experiment"
+            with patch("experiment.solve", return_value=solved), patch("experiment.save_trace"), patch(
+                "experiment.build_dataset", return_value={"samples_written": 3}
+            ), patch(
+                "experiment.comparison_dataset_builder.build_comparison_dataset",
+                return_value={"samples_read": 3, "pairs_written": 2, "skipped_no_negative": 1},
+            ) as build_comparison, patch(
+                "experiment.train_policy.train", side_effect=fake_train
+            ), patch(
+                "experiment.report.build_report", return_value={"ok": True}
+            ), patch(
+                "experiment.report.render_json", return_value="{}"
+            ):
+                summary = experiment.run_experiment(
+                    args(output_dir, comparison_negatives_per_sample=1, comparison_loss_weight=0.25)
+                )
+
+            build_comparison.assert_called_once()
+            manifest = json.loads(Path(summary["manifest_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(2, summary["comparison_samples"])
+        self.assertEqual(0.7, summary["comparison_loss"])
+        self.assertEqual(0.6, summary["comparison_accuracy"])
+        self.assert_path_under(summary["comparison_dataset_path"], output_dir)
+        self.assertEqual(1, manifest["parameters"]["comparison_negatives_per_sample"])
+        self.assertEqual(0.25, manifest["parameters"]["comparison_loss_weight"])
+        self.assertEqual(2, manifest["comparison_summary"]["pairs_written"])
+        self.assertEqual(2, manifest["training"]["comparison_samples"])
+        self.assert_path_under(manifest["paths"]["comparison_dataset"], output_dir)
 
     def test_summary_fields_are_stable(self):
         summary = {
@@ -206,6 +296,9 @@ class ExperimentTests(unittest.TestCase):
             "device": "cpu",
             "train_accuracy": 0.25,
             "validation_accuracy": 0.5,
+            "comparison_samples": 0,
+            "comparison_loss": 0.0,
+            "comparison_accuracy": 0.0,
         }
         expected = [
             "seeds",
@@ -217,6 +310,9 @@ class ExperimentTests(unittest.TestCase):
             "device",
             "train_accuracy",
             "validation_accuracy",
+            "comparison_samples",
+            "comparison_loss",
+            "comparison_accuracy",
         ]
 
         self.assertEqual(expected, list(summary.keys()))

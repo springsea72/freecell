@@ -242,9 +242,13 @@ The current minimal trainer exposes `--hidden-size`, `--batch-size`, `--lr`, `--
 
 The trainer also exposes `--progress-loss-weight`, defaulting to `0.1`. When JSONL rows include `progress`, training adds a small auxiliary MSE loss for the `progress_value` head while preserving action cross entropy as the primary objective. Setting the weight to `0` keeps the old action-only optimization behavior, while metadata still records the auxiliary target configuration.
 
+The trainer can optionally consume a pairwise comparison JSONL with `--comparison-dataset` and `--comparison-loss-weight`. This adds a BCE loss on the action-score difference between preferred and rejected moves, leaving the progress head untouched and keeping the old training command behavior when no comparison dataset is supplied.
+
 The experiment orchestrator writes all generated traces, datasets, models, reports, and `manifest.json` under the requested output directory. The manifest records experiment parameters, seed range, solved trace count, dataset sample count, generated paths, and training summary. These generated artifacts remain ignored by git.
 
 Experiment runs should pass through `--progress-loss-weight` to training and record it in both manifest parameters and training metadata so progress-loss experiments remain reproducible.
+
+Experiment runs may derive `comparison_dataset.jsonl` inside the output directory when `--comparison-negatives-per-sample` is positive, then pass it to training with the configured comparison loss weight. The manifest records pair counts, paths, and comparison loss metrics.
 
 ## Explicitly Out of Scope
 
