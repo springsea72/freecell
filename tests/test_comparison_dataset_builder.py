@@ -50,6 +50,8 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
         self.assertEqual(12, pair["step_index"])
         self.assertEqual("seed_000001.json:12", pair["source_sample"])
         self.assertEqual("trace_action_vs_non_trace", pair["reason"])
+        self.assertEqual("random", pair["negative_strategy"])
+        self.assertEqual(0, pair["rejected_rank"])
         self.assertEqual(sample()["action"], pair["preferred_action"])
 
     def test_rejected_action_index_differs_from_preferred_index(self):
@@ -73,6 +75,18 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
 
         self.assertEqual(first, second)
 
+    def test_default_random_matches_explicit_random_strategy(self):
+        default_pairs, default_summary = comparison_dataset_builder.build_comparison_samples([sample()], seed=99)
+        random_pairs, random_summary = comparison_dataset_builder.build_comparison_samples(
+            [sample()],
+            seed=99,
+            negative_strategy="random",
+        )
+
+        self.assertEqual(default_pairs, random_pairs)
+        self.assertEqual(default_summary, random_summary)
+        self.assertEqual("random", default_pairs[0]["negative_strategy"])
+
     def test_negatives_per_sample_is_capped_by_available_negatives(self):
         pairs, summary = comparison_dataset_builder.build_comparison_samples(
             [sample()],
@@ -83,6 +97,39 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
         self.assertEqual(2, len(pairs))
         self.assertEqual(2, summary["pairs_written"])
         self.assertEqual({0, 2}, {pair["rejected_action_index"] for pair in pairs})
+        self.assertEqual([0, 1], [pair["rejected_rank"] for pair in pairs])
+
+    def test_heuristic_bad_prefers_ordinary_col_to_free(self):
+        test_sample = sample(action_index=1)
+        test_sample["state"]["columns"][0] = [
+            {"suit": "CLUBS", "value": 10},
+            {"suit": "SPADES", "value": 9},
+        ]
+
+        pairs, _ = comparison_dataset_builder.build_comparison_samples(
+            [test_sample],
+            seed=123,
+            negative_strategy="heuristic_bad",
+        )
+
+        self.assertEqual("COL_TO_FREE", pairs[0]["rejected_action"]["move_type"])
+        self.assertEqual("heuristic_bad", pairs[0]["negative_strategy"])
+        self.assertEqual(0, pairs[0]["rejected_rank"])
+
+    def test_heuristic_bad_avoids_home_negative_when_other_candidates_exist(self):
+        test_sample = sample(action_index=2)
+        test_sample["state"]["columns"][0] = [
+            {"suit": "CLUBS", "value": 10},
+            {"suit": "SPADES", "value": 9},
+        ]
+
+        pairs, _ = comparison_dataset_builder.build_comparison_samples(
+            [test_sample],
+            seed=123,
+            negative_strategy="heuristic_bad",
+        )
+
+        self.assertNotIn("HOME", pairs[0]["rejected_action"]["move_type"])
 
     def test_output_jsonl_is_parseable_and_fields_are_stable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -103,6 +150,8 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
                 "rejected_action",
                 "preferred_action_index",
                 "rejected_action_index",
+                "negative_strategy",
+                "rejected_rank",
                 "reason",
                 "progress",
             },
@@ -127,6 +176,19 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertIn("dataset does not exist", stderr.getvalue())
 
+    def test_cli_rejects_invalid_negative_strategy(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            comparison_dataset_builder.parse_args(
+                [
+                    "--dataset",
+                    "dataset.jsonl",
+                    "--output",
+                    "pairs.jsonl",
+                    "--negative-strategy",
+                    "unknown",
+                ]
+            )
+
     def test_cli_writes_summary_and_jsonl(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             dataset = Path(tmpdir) / "dataset.jsonl"
@@ -145,12 +207,15 @@ class ComparisonDatasetBuilderTests(unittest.TestCase):
                         "2",
                         "--seed",
                         "123",
+                        "--negative-strategy",
+                        "heuristic_bad",
                     ]
                 )
             rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(0, exit_code)
         self.assertEqual(2, len(rows))
+        self.assertEqual("heuristic_bad", rows[0]["negative_strategy"])
         self.assertIn("samples_read: 1", stdout.getvalue())
         self.assertIn("pairs_written: 2", stdout.getvalue())
 

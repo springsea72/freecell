@@ -33,6 +33,11 @@ def parse_args(argv=None):
         default=train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
     )
     parser.add_argument("--comparison-negatives-per-sample", type=int, default=0)
+    parser.add_argument(
+        "--comparison-negative-strategy",
+        choices=comparison_dataset_builder.NEGATIVE_STRATEGIES,
+        default=comparison_dataset_builder.DEFAULT_NEGATIVE_STRATEGY,
+    )
     parser.add_argument("--comparison-loss-weight", type=float, default=0.0)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -126,6 +131,7 @@ def run_experiment(args) -> dict:
             dataset_path,
             comparison_dataset_path,
             negatives_per_sample=args.comparison_negatives_per_sample,
+            negative_strategy=args.comparison_negative_strategy,
             seed=args.training_seed,
         )
         train_comparison_dataset = comparison_dataset_path
@@ -244,6 +250,7 @@ def _write_manifest(
             "hidden_size": args.hidden_size,
             "progress_loss_weight": args.progress_loss_weight,
             "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
+            "comparison_negative_strategy": args.comparison_negative_strategy,
             "comparison_loss_weight": args.comparison_loss_weight,
             "lr": args.lr,
             "device": args.device,
@@ -285,6 +292,7 @@ def _write_manifest(
             "hidden_size": args.hidden_size,
             "progress_loss_weight": args.progress_loss_weight,
             "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
+            "comparison_negative_strategy": args.comparison_negative_strategy,
             "comparison_loss_weight": args.comparison_loss_weight,
             "comparison_dataset": None if comparison_dataset_path is None else str(comparison_dataset_path),
             "comparison_samples": comparison_summary["pairs_written"],

@@ -22,6 +22,7 @@ def args(output_dir, **overrides):
         "hidden_size": 64,
         "progress_loss_weight": train_policy.learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT,
         "comparison_negatives_per_sample": 0,
+        "comparison_negative_strategy": "random",
         "comparison_loss_weight": 0.0,
         "lr": 0.001,
         "device": "cpu",
@@ -101,6 +102,37 @@ class ExperimentTests(unittest.TestCase):
                     "1",
                     "--comparison-negatives-per-sample",
                     "-1",
+                    "--output-dir",
+                    "out",
+                ]
+            )
+
+    def test_parse_accepts_comparison_negative_strategy(self):
+        parsed = experiment.parse_args(
+            [
+                "--seed-start",
+                "1",
+                "--seed-count",
+                "1",
+                "--comparison-negative-strategy",
+                "heuristic_bad",
+                "--output-dir",
+                "out",
+            ]
+        )
+
+        self.assertEqual("heuristic_bad", parsed.comparison_negative_strategy)
+
+    def test_parse_rejects_invalid_comparison_negative_strategy(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            experiment.parse_args(
+                [
+                    "--seed-start",
+                    "1",
+                    "--seed-count",
+                    "1",
+                    "--comparison-negative-strategy",
+                    "unknown",
                     "--output-dir",
                     "out",
                 ]
@@ -227,10 +259,12 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(0.1, manifest["training"]["progress_loss_weight"])
             self.assertEqual(0.1, manifest["train_summary"]["progress_loss_weight"])
             self.assertEqual(0, manifest["parameters"]["comparison_negatives_per_sample"])
+            self.assertEqual("random", manifest["parameters"]["comparison_negative_strategy"])
             self.assertEqual(0.0, manifest["parameters"]["comparison_loss_weight"])
             self.assertIsNone(manifest["paths"]["comparison_dataset"])
             self.assertEqual(0, manifest["summary"]["comparison_samples"])
             self.assertEqual(0, manifest["training"]["comparison_samples"])
+            self.assertEqual("random", manifest["training"]["comparison_negative_strategy"])
             self.assertEqual(0.0, manifest["training"]["comparison_loss_weight"])
             self.assertEqual(0.001, manifest["training"]["lr"])
             self.assert_path_under(manifest["paths"]["dataset"], output_dir)
@@ -269,10 +303,16 @@ class ExperimentTests(unittest.TestCase):
                 "experiment.report.render_json", return_value="{}"
             ):
                 summary = experiment.run_experiment(
-                    args(output_dir, comparison_negatives_per_sample=1, comparison_loss_weight=0.25)
+                    args(
+                        output_dir,
+                        comparison_negatives_per_sample=1,
+                        comparison_negative_strategy="heuristic_bad",
+                        comparison_loss_weight=0.25,
+                    )
                 )
 
             build_comparison.assert_called_once()
+            self.assertEqual("heuristic_bad", build_comparison.call_args.kwargs["negative_strategy"])
             manifest = json.loads(Path(summary["manifest_path"]).read_text(encoding="utf-8"))
 
         self.assertEqual(2, summary["comparison_samples"])
@@ -280,9 +320,11 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(0.6, summary["comparison_accuracy"])
         self.assert_path_under(summary["comparison_dataset_path"], output_dir)
         self.assertEqual(1, manifest["parameters"]["comparison_negatives_per_sample"])
+        self.assertEqual("heuristic_bad", manifest["parameters"]["comparison_negative_strategy"])
         self.assertEqual(0.25, manifest["parameters"]["comparison_loss_weight"])
         self.assertEqual(2, manifest["comparison_summary"]["pairs_written"])
         self.assertEqual(2, manifest["training"]["comparison_samples"])
+        self.assertEqual("heuristic_bad", manifest["training"]["comparison_negative_strategy"])
         self.assert_path_under(manifest["paths"]["comparison_dataset"], output_dir)
 
     def test_summary_fields_are_stable(self):

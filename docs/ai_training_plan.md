@@ -52,7 +52,7 @@ Training must use an action mask. The model may score candidate moves, but the f
 
 The `progress` field is additive. Existing JSONL rows without it remain valid for the current feature extraction and imitation trainer.
 
-Pairwise comparison rows are a separate optional dataset derived from the JSONL rows above. They keep the same pre-action `state`, copy `progress` when available, and store `preferred_action` as the trace action with `rejected_action` sampled from the same `legal_moves`. This does not change the original dataset schema or current trainer.
+Pairwise comparison rows are a separate optional dataset derived from the JSONL rows above. They keep the same pre-action `state`, copy `progress` when available, and store `preferred_action` as the trace action with `rejected_action` sampled from the same `legal_moves`. Negative sampling currently supports reproducible `random` selection and a local `heuristic_bad` ranking that favors resource-consuming non-home moves without calling the solver. This does not change the original dataset schema or current trainer.
 
 Invalid samples should be rejected during dataset loading or smoke validation:
 
@@ -248,7 +248,7 @@ The experiment orchestrator writes all generated traces, datasets, models, repor
 
 Experiment runs should pass through `--progress-loss-weight` to training and record it in both manifest parameters and training metadata so progress-loss experiments remain reproducible.
 
-Experiment runs may derive `comparison_dataset.jsonl` inside the output directory when `--comparison-negatives-per-sample` is positive, then pass it to training with the configured comparison loss weight. The manifest records pair counts, paths, and comparison loss metrics.
+Experiment runs may derive `comparison_dataset.jsonl` inside the output directory when `--comparison-negatives-per-sample` is positive, then pass it to training with the configured comparison loss weight. The manifest records pair counts, paths, negative sampling strategy, and comparison loss metrics.
 
 ## Explicitly Out of Scope
 
