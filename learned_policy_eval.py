@@ -3,11 +3,13 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import learned_policy
 from game_model import FreeCellGame, MoveType
 from policy_baseline import load_jsonl
 from policy_features import features_from_sample
+from trace_io import save_trace
 
 
 RERANK_ADJUSTMENT_LIMIT = 0.12
@@ -77,41 +79,58 @@ def score_sample_moves(sample, model_bundle, device=None) -> list[float]:
 
 
 def play_game(seed, model_bundle, max_steps=500, device=None) -> PlayResult:
+    result, _ = _play_game_with_moves(seed, model_bundle, max_steps=max_steps, device=device)
+    return result
+
+
+def _play_game_with_moves(seed, model_bundle, max_steps=500, device=None) -> tuple[PlayResult, list]:
     game = FreeCellGame(seed=seed)
     visited = {game.state_key()}
+    moves = []
     steps = 0
 
     if game.is_won():
-        return _result(seed, True, steps, "won", game, visited)
+        return _result(seed, True, steps, "won", game, visited), moves
 
     while steps < max_steps:
         legal_moves = game.generate_legal_moves()
         if not legal_moves:
             reason = "won" if game.is_won() else "no_legal_moves"
-            return _result(seed, game.is_won(), steps, reason, game, visited)
+            return _result(seed, game.is_won(), steps, reason, game, visited), moves
 
         selected_move = _choose_non_looping_move(game, model_bundle, visited, device=device)
         if selected_move is None:
-            return _result(seed, False, steps, "loop_detected", game, visited)
+            return _result(seed, False, steps, "loop_detected", game, visited), moves
 
         if not game.apply_move(selected_move):
-            return _result(seed, False, steps, "invalid_action", game, visited)
+            return _result(seed, False, steps, "invalid_action", game, visited), moves
 
+        moves.append(selected_move)
         steps += 1
         visited.add(game.state_key())
 
         if game.is_won():
-            return _result(seed, True, steps, "won", game, visited)
+            return _result(seed, True, steps, "won", game, visited), moves
 
-    return _result(seed, game.is_won(), steps, "max_steps", game, visited)
+    return _result(seed, game.is_won(), steps, "max_steps", game, visited), moves
 
 
-def evaluate_seeds(seeds, model_path, max_steps=500, device="auto") -> dict:
+def evaluate_seeds(seeds, model_path, max_steps=500, device="auto", save_won_traces=None) -> dict:
     model_bundle = learned_policy.load_model(model_path, device=device)
-    results = [play_game(seed, model_bundle, max_steps=max_steps, device=device) for seed in seeds]
+    results = []
+    won_traces_saved = 0
+    trace_dir = Path(save_won_traces) if save_won_traces is not None else None
+
+    for seed in seeds:
+        result, moves = _play_game_with_moves(seed, model_bundle, max_steps=max_steps, device=device)
+        results.append(result)
+        if trace_dir is not None and result.won:
+            _save_won_trace(trace_dir, seed, moves, max_steps=max_steps)
+            won_traces_saved += 1
+
     games = len(results)
     won = sum(1 for result in results if result.won)
-    return {
+    summary = {
         "mode": "play",
         "games": games,
         "won": won,
@@ -122,6 +141,40 @@ def evaluate_seeds(seeds, model_path, max_steps=500, device="auto") -> dict:
         "model_path": str(model_path),
         "results": results,
     }
+    if trace_dir is not None:
+        summary["won_traces_saved"] = won_traces_saved
+        summary["won_trace_dir"] = str(trace_dir)
+    return summary
+
+
+def _save_won_trace(trace_dir: Path, seed: int, moves: list, max_steps: int) -> None:
+    if not _moves_replay_to_win(seed, moves):
+        raise RuntimeError(f"won path failed replay verification for seed {seed}")
+
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    result = SimpleNamespace(
+        solved=True,
+        moves=moves,
+        explored_nodes=0,
+        generated_nodes=len(moves),
+        max_frontier=0,
+        reason="won",
+    )
+    save_trace(
+        trace_dir / f"seed_{seed:06d}.json",
+        seed=seed,
+        max_nodes=0,
+        max_depth=max_steps,
+        result=result,
+    )
+
+
+def _moves_replay_to_win(seed: int, moves: list) -> bool:
+    game = FreeCellGame(seed=seed)
+    for move in moves:
+        if not game.apply_move(move):
+            return False
+    return game.is_won()
 
 
 def _choose_non_looping_move(game, model_bundle, visited, device=None):
@@ -283,8 +336,11 @@ def parse_args(argv=None):
     parser.add_argument("--seed-count", type=int)
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--save-won-traces")
     args = parser.parse_args(argv)
 
+    if args.dataset is not None and args.save_won_traces is not None:
+        parser.error("--save-won-traces is only valid in play mode")
     if args.seed_start is not None and args.seed_count is None:
         parser.error("--seed-count is required with --seed-start")
     if args.seed_count is not None and args.seed_count <= 0:
@@ -318,7 +374,13 @@ def main(argv=None):
             summary = evaluate_file(args.dataset, args.model, device=args.device)
             print_dataset_summary(summary)
         else:
-            summary = evaluate_seeds(seeds_from_args(args), args.model, max_steps=args.max_steps, device=args.device)
+            summary = evaluate_seeds(
+                seeds_from_args(args),
+                args.model,
+                max_steps=args.max_steps,
+                device=args.device,
+                save_won_traces=args.save_won_traces,
+            )
             print_play_summary(summary)
     except (ModuleNotFoundError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"failed to evaluate learned policy: {exc}", file=sys.stderr)
@@ -351,6 +413,9 @@ def print_play_summary(summary):
     print(f"average_home_cards: {summary['average_home_cards']:.2f}")
     print(f"device: {summary['device']}")
     print(f"model_path: {summary['model_path']}")
+    if "won_traces_saved" in summary:
+        print(f"won_traces_saved: {summary['won_traces_saved']}")
+        print(f"won_trace_dir: {summary['won_trace_dir']}")
 
 
 if __name__ == "__main__":

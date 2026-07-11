@@ -1,10 +1,13 @@
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest.mock import patch
 
 import learned_policy_eval
 import solver
+import trace_io
 from game_model import Card, FreeCellGame, Move, MoveType, Suit
 
 
@@ -239,6 +242,107 @@ class LearnedPolicyEvalTests(unittest.TestCase):
 
         self.assertEqual(1, exit_code)
         self.assertIn("model does not exist", stderr.getvalue())
+
+    def test_save_won_traces_saves_verified_trace_for_won_seed(self):
+        move = Move(MoveType.COL_TO_HOME, 0)
+        result = learned_policy_eval.PlayResult(7, "learned", True, 1, "won", 52, 2)
+
+        bundle = type("Bundle", (), {"device": "cpu"})()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch(
+            "learned_policy.load_model", return_value=bundle
+        ), patch(
+            "learned_policy_eval._play_game_with_moves", return_value=(result, [move])
+        ), patch(
+            "learned_policy_eval._moves_replay_to_win", return_value=True
+        ):
+            summary = learned_policy_eval.evaluate_seeds(
+                [7],
+                "model.pt",
+                max_steps=5,
+                device="cpu",
+                save_won_traces=tmpdir,
+            )
+            trace_path = Path(tmpdir) / "seed_000007.json"
+            trace = trace_io.load_trace(trace_path)
+
+            with patch("trace_io.FreeCellGame", RecordingGame):
+                verified = trace_io.verify_trace(trace)
+
+            self.assertEqual(1, summary["won_traces_saved"])
+            self.assertEqual(tmpdir, summary["won_trace_dir"])
+            self.assertTrue(trace_path.exists())
+            self.assertTrue(verified)
+
+    def test_save_won_traces_skips_non_winning_seed(self):
+        result = learned_policy_eval.PlayResult(7, "learned", False, 1, "loop_detected", 3, 2)
+
+        bundle = type("Bundle", (), {"device": "cpu"})()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch(
+            "learned_policy.load_model", return_value=bundle
+        ), patch("learned_policy_eval._play_game_with_moves", return_value=(result, [])):
+            summary = learned_policy_eval.evaluate_seeds(
+                [7],
+                "model.pt",
+                max_steps=5,
+                device="cpu",
+                save_won_traces=tmpdir,
+            )
+
+        self.assertEqual(0, summary["won_traces_saved"])
+        self.assertFalse(list(Path(tmpdir).glob("*.json")))
+
+    def test_save_won_traces_replay_failure_returns_nonzero_and_saves_nothing(self):
+        result = learned_policy_eval.PlayResult(7, "learned", True, 1, "won", 52, 2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "model.pt"
+            model_path.write_text("not a real model", encoding="utf-8")
+            trace_dir = Path(tmpdir) / "traces"
+            stderr = io.StringIO()
+
+            bundle = type("Bundle", (), {"device": "cpu"})()
+            with patch("learned_policy.load_model", return_value=bundle), patch(
+                "learned_policy_eval._play_game_with_moves", return_value=(result, [Move(MoveType.COL_TO_HOME, 0)])
+            ), patch("learned_policy_eval._moves_replay_to_win", return_value=False), redirect_stderr(stderr):
+                exit_code = learned_policy_eval.main(
+                    [
+                        "--model",
+                        str(model_path),
+                        "--seed",
+                        "7",
+                        "--save-won-traces",
+                        str(trace_dir),
+                    ]
+                )
+
+        self.assertEqual(1, exit_code)
+        self.assertIn("failed replay verification", stderr.getvalue())
+        self.assertFalse(trace_dir.exists())
+
+    def test_dataset_mode_rejects_save_won_traces(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            learned_policy_eval.parse_args(
+                [
+                    "--model",
+                    "model.pt",
+                    "--dataset",
+                    "dataset.jsonl",
+                    "--save-won-traces",
+                    "traces",
+                ]
+            )
+
+    def test_trace_replay_uses_fresh_game_without_polluting_existing_state(self):
+        existing_game = RecordingGame(seed=7)
+        before = existing_game.state_key()
+
+        with patch("learned_policy_eval.FreeCellGame", RecordingGame):
+            verified = learned_policy_eval._moves_replay_to_win(7, [Move(MoveType.COL_TO_HOME, 0)])
+
+        self.assertTrue(verified)
+        self.assertEqual(before, existing_game.state_key())
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
     def test_evaluate_file_loads_model_and_reports_accuracy(self):
