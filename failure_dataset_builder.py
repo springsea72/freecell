@@ -7,7 +7,7 @@ from pathlib import Path
 import learned_policy
 import learned_policy_eval
 from dataset_builder import home_card_count, state_to_dict
-from game_model import FreeCellGame
+from game_model import FreeCellGame, MoveType, Suit
 from trace_io import move_to_dict
 
 
@@ -143,7 +143,7 @@ def _record_from_scored_moves(seed, game, scored_moves, chosen_index, step_index
     legal_moves = [move for move, _ in scored_moves]
     model_scores = [float(score) for _, score in scored_moves]
     chosen_action = legal_moves[chosen_index]
-    return {
+    row = {
         "version": FAILURE_DATASET_VERSION,
         "seed": seed,
         "policy": POLICY_NAME,
@@ -157,6 +157,86 @@ def _record_from_scored_moves(seed, game, scored_moves, chosen_index, step_index
         "visited_states": visited_states,
         "would_loop": would_loop,
     }
+    row.update(_diagnostics_from_game(game, chosen_action))
+    return row
+
+
+def _diagnostics_from_game(game, chosen_action) -> dict:
+    empty_free_cells = sum(1 for card in game.free_cells if card is None)
+    empty_columns = sum(1 for column in game.columns if not column)
+    return {
+        "empty_free_cells": empty_free_cells,
+        "empty_columns": empty_columns,
+        "buffer_slots": empty_free_cells + empty_columns,
+        "buried_low_cards": _buried_low_cards(game),
+        "movable_suffix_total": sum(_movable_suffix_length(column) for column in game.columns),
+        "top_cards_to_home": _top_cards_to_home(game),
+        "chosen_reduces_buffer": _chosen_reduces_buffer(game, chosen_action),
+        "chosen_releases_low_card": _move_releases_low_card(game, chosen_action),
+        "chosen_is_home_move": chosen_action.move_type in (MoveType.FREE_TO_HOME, MoveType.COL_TO_HOME),
+    }
+
+
+def _buried_low_cards(game) -> int:
+    return sum(1 for column in game.columns for card in column[:-1] if 1 <= card.value <= 3)
+
+
+def _movable_suffix_length(column) -> int:
+    if not column:
+        return 0
+    length = 1
+    for index in range(len(column) - 2, -1, -1):
+        lower_card = column[index]
+        upper_card = column[index + 1]
+        if _card_color(lower_card) == _card_color(upper_card):
+            break
+        if lower_card.value != upper_card.value + 1:
+            break
+        length += 1
+    return length
+
+
+def _top_cards_to_home(game) -> int:
+    count = 0
+    for column in game.columns:
+        if column and _can_move_card_home(game, column[-1]):
+            count += 1
+    for card in game.free_cells:
+        if card is not None and _can_move_card_home(game, card):
+            count += 1
+    return count
+
+
+def _can_move_card_home(game, card) -> bool:
+    return card.value == len(game.home_cells[card.suit]) + 1
+
+
+def _chosen_reduces_buffer(game, chosen_action) -> bool:
+    before = _buffer_slots(game)
+    probe = game.clone()
+    if not probe.apply_move(chosen_action):
+        return False
+    return _buffer_slots(probe) < before
+
+
+def _buffer_slots(game) -> int:
+    return sum(1 for card in game.free_cells if card is None) + sum(1 for column in game.columns if not column)
+
+
+def _move_releases_low_card(game, move) -> bool:
+    if move.move_type not in (MoveType.COL_TO_HOME, MoveType.COL_TO_FREE, MoveType.COL_TO_COL):
+        return False
+    if not isinstance(move.from_idx, int) or move.from_idx < 0 or move.from_idx >= len(game.columns):
+        return False
+    column = game.columns[move.from_idx]
+    remaining = len(column) - move.count
+    if remaining <= 0:
+        return False
+    return 1 <= column[remaining - 1].value <= 3
+
+
+def _card_color(card) -> str:
+    return "black" if card.suit in (Suit.SPADES, Suit.CLUBS) else "red"
 
 
 def _run_result(won, terminal_reason, terminal_step, records) -> dict:

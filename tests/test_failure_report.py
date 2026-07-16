@@ -32,6 +32,15 @@ def row(reason="loop_detected", terminal=True, move_type="COL_TO_FREE", scores=N
         "visited_states": 10,
         "is_terminal_step": terminal,
         "would_loop": reason == "loop_detected",
+        "empty_free_cells": 2,
+        "empty_columns": 1,
+        "buffer_slots": 3,
+        "buried_low_cards": 4,
+        "movable_suffix_total": 12,
+        "top_cards_to_home": 2,
+        "chosen_reduces_buffer": True,
+        "chosen_releases_low_card": False,
+        "chosen_is_home_move": move_type in ("FREE_TO_HOME", "COL_TO_HOME"),
     }
 
 
@@ -66,6 +75,7 @@ class FailureReportTests(unittest.TestCase):
 
         self.assertIn("terminal_reasons:", text)
         self.assertIn("average_chosen_action_rank:", text)
+        self.assertIn("average_buffer_slots:", text)
         self.assertIn("top_bad_patterns:", text)
 
     def test_empty_input_returns_zero_metrics(self):
@@ -75,6 +85,46 @@ class FailureReportTests(unittest.TestCase):
         self.assertEqual(0, report["terminal_samples"])
         self.assertEqual(0.0, report["would_loop_ratio"])
         self.assertEqual(0.0, report["average_chosen_action_rank"])
+        self.assertEqual(0.0, report["average_buffer_slots"])
+
+    def test_diagnostic_averages_are_calculated(self):
+        first = row(move_type="COL_TO_FREE")
+        second = row(reason="no_legal_moves", move_type="COL_TO_HOME")
+        second["buffer_slots"] = 7
+        second["buried_low_cards"] = 0
+        second["movable_suffix_total"] = 4
+        second["top_cards_to_home"] = 6
+
+        report = failure_report.build_report([first, second])
+
+        self.assertEqual(5.0, report["average_buffer_slots"])
+        self.assertEqual(2.0, report["average_buried_low_cards"])
+        self.assertEqual(8.0, report["average_movable_suffix_total"])
+        self.assertEqual(4.0, report["average_top_cards_to_home"])
+        self.assertEqual(3.0, report["by_terminal_reason"]["loop_detected"]["average_buffer_slots"])
+        self.assertEqual(7.0, report["by_terminal_reason"]["no_legal_moves"]["average_buffer_slots"])
+        self.assertEqual(2, report["top_bad_patterns"]["chosen_reduces_buffer_count"])
+        self.assertEqual(1, report["top_bad_patterns"]["chosen_is_home_move_count"])
+        self.assertEqual(0, report["top_bad_patterns"]["chosen_releases_low_card_count"])
+
+    def test_missing_diagnostic_fields_default_to_zero(self):
+        legacy = row()
+        for field in (
+            "buffer_slots",
+            "buried_low_cards",
+            "movable_suffix_total",
+            "top_cards_to_home",
+            "chosen_reduces_buffer",
+            "chosen_releases_low_card",
+            "chosen_is_home_move",
+        ):
+            legacy.pop(field, None)
+
+        report = failure_report.build_report([legacy])
+
+        self.assertEqual(0.0, report["average_buffer_slots"])
+        self.assertEqual(0.0, report["by_terminal_reason"]["loop_detected"]["average_buried_low_cards"])
+        self.assertEqual(0, report["top_bad_patterns"]["chosen_reduces_buffer_count"])
 
     def test_missing_file_returns_nonzero(self):
         stderr = io.StringIO()

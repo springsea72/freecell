@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import failure_dataset_builder
 import solver
-from game_model import Card, Move, MoveType, Suit
+from game_model import Card, FreeCellGame, Move, MoveType, Suit
 from trace_io import move_to_dict
 
 
@@ -129,6 +129,15 @@ class FailureDatasetBuilderTests(unittest.TestCase):
         self.assertEqual(1, row["terminal_step"])
         self.assertTrue(row["is_terminal_step"])
         self.assertFalse(row["would_loop"])
+        self.assertEqual(4, row["empty_free_cells"])
+        self.assertEqual(7, row["empty_columns"])
+        self.assertEqual(11, row["buffer_slots"])
+        self.assertEqual(0, row["buried_low_cards"])
+        self.assertEqual(1, row["movable_suffix_total"])
+        self.assertEqual(1, row["top_cards_to_home"])
+        self.assertFalse(row["chosen_reduces_buffer"])
+        self.assertFalse(row["chosen_releases_low_card"])
+        self.assertTrue(row["chosen_is_home_move"])
 
     def test_loop_failure_writes_terminal_candidate_sample(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -169,6 +178,27 @@ class FailureDatasetBuilderTests(unittest.TestCase):
 
         self.assertEqual(row["chosen_action"], row["legal_moves"][row["chosen_action_index"]])
         self.assertEqual(move_to_dict(MOVE_HOME), row["chosen_action"])
+
+    def test_diagnostics_detect_buffer_reduction_without_mutating_game(self):
+        game = FreeCellGame(deal=[[] for _ in range(8)])
+        game.columns[0] = [card(Suit.CLUBS, 6), card(Suit.SPADES, 5)]
+        move = Move(MoveType.COL_TO_COL, 0, 1)
+        before = game.state_key()
+
+        diagnostics = failure_dataset_builder._diagnostics_from_game(game, move)
+
+        self.assertTrue(diagnostics["chosen_reduces_buffer"])
+        self.assertEqual(before, game.state_key())
+
+    def test_diagnostics_detect_released_low_card(self):
+        game = FreeCellGame(deal=[[] for _ in range(8)])
+        game.columns[0] = [card(Suit.SPADES, 1), card(Suit.HEARTS, 5)]
+        move = Move(MoveType.COL_TO_COL, 0, 1)
+
+        diagnostics = failure_dataset_builder._diagnostics_from_game(game, move)
+
+        self.assertEqual(1, diagnostics["buried_low_cards"])
+        self.assertTrue(diagnostics["chosen_releases_low_card"])
 
     def test_builder_does_not_call_solver(self):
         with tempfile.TemporaryDirectory() as tmpdir:
