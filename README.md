@@ -1,5 +1,7 @@
 # FreeCell
 
+AI experiment notes: [docs/ai_experiment_notes.md](docs/ai_experiment_notes.md)
+
 这是一个使用 Python 标准库实现的 FreeCell 项目。当前仓库包含统一规则模型、命令行入口、Tkinter GUI、离线启发式求解器、trace 回放、benchmark、JSONL 数据集构建、策略基线、直接策略游玩评估和统一报告工具。
 
 ## 功能概览
