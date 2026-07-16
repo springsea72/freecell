@@ -29,21 +29,31 @@ def load_samples(path) -> list[dict]:
     return samples
 
 
-def load_comparison_samples(path) -> list[dict]:
-    if path is None:
+def comparison_dataset_paths(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [path for path in value if path is not None]
+    return [value]
+
+
+def load_comparison_samples(path_or_paths) -> list[dict]:
+    paths = comparison_dataset_paths(path_or_paths)
+    if not paths:
         return []
     samples = []
-    with Path(path).open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                pair = json.loads(line)
-                comparison_features_from_pair(pair)
-            except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
-                raise ValueError(f"invalid comparison sample at line {line_number}: {exc}") from exc
-            samples.append(pair)
+    for path in paths:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pair = json.loads(line)
+                    comparison_features_from_pair(pair)
+                except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+                    raise ValueError(f"invalid comparison sample in {path} at line {line_number}: {exc}") from exc
+                samples.append(pair)
     return samples
 
 
@@ -84,10 +94,11 @@ def train(args) -> dict:
     if progress_loss_weight < 0:
         raise ValueError("progress_loss_weight must be >= 0")
     comparison_dataset = getattr(args, "comparison_dataset", None)
+    comparison_datasets = comparison_dataset_paths(comparison_dataset)
     comparison_loss_weight = getattr(args, "comparison_loss_weight", 0.0)
     if comparison_loss_weight < 0:
         raise ValueError("comparison_loss_weight must be >= 0")
-    comparison_samples = load_comparison_samples(comparison_dataset) if comparison_dataset else []
+    comparison_samples = load_comparison_samples(comparison_datasets)
 
     model = learned_policy.create_model(hidden_size=hidden_size, torch=torch).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -127,7 +138,8 @@ def train(args) -> dict:
             "hidden_size": hidden_size,
             "lr": args.lr,
             "progress_loss_weight": progress_loss_weight,
-            "comparison_dataset": None if comparison_dataset is None else str(comparison_dataset),
+            "comparison_dataset": None if not comparison_datasets else str(comparison_datasets[0]),
+            "comparison_datasets": [str(path) for path in comparison_datasets],
             "comparison_loss_weight": comparison_loss_weight,
             "comparison_targets": list(COMPARISON_TARGETS),
             "validation_split": args.validation_split,
@@ -137,6 +149,7 @@ def train(args) -> dict:
     )
     metadata["comparison_loss_weight"] = comparison_loss_weight
     metadata["comparison_targets"] = list(COMPARISON_TARGETS)
+    metadata["comparison_datasets"] = [str(path) for path in comparison_datasets]
     learned_policy.save_model(args.output, model, metadata)
 
     return {
@@ -151,6 +164,7 @@ def train(args) -> dict:
         "train_loss": train_loss,
         "progress_loss": progress_loss,
         "progress_loss_weight": progress_loss_weight,
+        "comparison_datasets": len(comparison_datasets),
         "comparison_samples": len(comparison_samples),
         "comparison_loss": comparison_loss,
         "comparison_accuracy": comparison_accuracy,
@@ -328,7 +342,7 @@ def parse_args(argv=None):
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--hidden-size", type=int, default=learned_policy.DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--progress-loss-weight", type=float, default=learned_policy.DEFAULT_PROGRESS_LOSS_WEIGHT)
-    parser.add_argument("--comparison-dataset")
+    parser.add_argument("--comparison-dataset", action="append")
     parser.add_argument("--comparison-loss-weight", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -357,9 +371,10 @@ def main(argv=None):
     if args.comparison_loss_weight < 0:
         print("comparison-loss-weight must be >= 0", file=sys.stderr)
         return 1
-    if args.comparison_dataset is not None and not Path(args.comparison_dataset).exists():
-        print(f"comparison dataset does not exist: {args.comparison_dataset}", file=sys.stderr)
-        return 1
+    for comparison_dataset in comparison_dataset_paths(args.comparison_dataset):
+        if not Path(comparison_dataset).exists():
+            print(f"comparison dataset does not exist: {comparison_dataset}", file=sys.stderr)
+            return 1
 
     try:
         summary = train(args)
@@ -379,6 +394,7 @@ def main(argv=None):
         "train_loss",
         "progress_loss",
         "progress_loss_weight",
+        "comparison_datasets",
         "comparison_samples",
         "comparison_loss",
         "comparison_accuracy",

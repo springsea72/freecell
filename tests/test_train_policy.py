@@ -296,6 +296,7 @@ class TrainPolicyTests(unittest.TestCase):
             summary = train_policy.train(args)
 
         self.assertEqual(0, summary["comparison_samples"])
+        self.assertEqual(0, summary["comparison_datasets"])
         self.assertEqual(0.0, summary["comparison_loss"])
         self.assertEqual(0.0, summary["comparison_accuracy"])
 
@@ -330,12 +331,60 @@ class TrainPolicyTests(unittest.TestCase):
             bundle = learned_policy.load_model(output, device="cpu")
 
         self.assertEqual(1, summary["comparison_samples"])
+        self.assertEqual(1, summary["comparison_datasets"])
         self.assertGreaterEqual(summary["comparison_loss"], 0.0)
         self.assertGreaterEqual(summary["comparison_accuracy"], 0.0)
         self.assertEqual(0.1, summary["comparison_loss_weight"])
         self.assertEqual(0.1, bundle.metadata["comparison_loss_weight"])
         self.assertEqual(["trace_action_preferred_over_sampled_legal_move"], bundle.metadata["comparison_targets"])
         self.assertEqual(0.1, bundle.metadata["training_args"]["comparison_loss_weight"])
+        self.assertEqual(str(comparison_dataset), bundle.metadata["training_args"]["comparison_dataset"])
+        self.assertEqual([str(comparison_dataset)], bundle.metadata["training_args"]["comparison_datasets"])
+        self.assertEqual([str(comparison_dataset)], bundle.metadata["comparison_datasets"])
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
+    def test_multiple_comparison_datasets_are_merged_and_recorded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            comparison_a = Path(tmpdir) / "pairs_a.jsonl"
+            comparison_b = Path(tmpdir) / "pairs_b.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+            write_jsonl_file(comparison_a, [comparison_pair()])
+            write_jsonl_file(comparison_b, [comparison_pair()])
+            args = type(
+                "Args",
+                (),
+                {
+                    "dataset": dataset,
+                    "comparison_dataset": [comparison_a, comparison_b],
+                    "output": output,
+                    "epochs": 1,
+                    "batch_size": 1,
+                    "hidden_size": 16,
+                    "lr": 0.001,
+                    "seed": 123,
+                    "device": "cpu",
+                    "validation_split": 0,
+                    "progress_loss_weight": 0.1,
+                    "comparison_loss_weight": 0.1,
+                },
+            )()
+
+            summary = train_policy.train(args)
+            bundle = learned_policy.load_model(output, device="cpu")
+
+        self.assertEqual(2, summary["comparison_datasets"])
+        self.assertEqual(2, summary["comparison_samples"])
+        self.assertEqual(
+            [str(comparison_a), str(comparison_b)],
+            bundle.metadata["comparison_datasets"],
+        )
+        self.assertEqual(str(comparison_a), bundle.metadata["training_args"]["comparison_dataset"])
+        self.assertEqual(
+            [str(comparison_a), str(comparison_b)],
+            bundle.metadata["training_args"]["comparison_datasets"],
+        )
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
     def test_comparison_loss_uses_action_score_only(self):
@@ -406,6 +455,33 @@ class TrainPolicyTests(unittest.TestCase):
 
         self.assertEqual(1, exit_code)
         self.assertIn("comparison-loss-weight", stderr.getvalue())
+
+    def test_cli_missing_second_comparison_dataset_returns_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "tiny.jsonl"
+            comparison_dataset = Path(tmpdir) / "pairs.jsonl"
+            missing = Path(tmpdir) / "missing_pairs.jsonl"
+            output = Path(tmpdir) / "policy.pt"
+            write_jsonl(dataset, [tiny_sample()])
+            write_jsonl_file(comparison_dataset, [comparison_pair()])
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                exit_code = train_policy.main(
+                    [
+                        "--dataset",
+                        str(dataset),
+                        "--output",
+                        str(output),
+                        "--comparison-dataset",
+                        str(comparison_dataset),
+                        "--comparison-dataset",
+                        str(missing),
+                    ]
+                )
+
+        self.assertEqual(1, exit_code)
+        self.assertIn("comparison dataset does not exist", stderr.getvalue())
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not installed; optional ML tests skipped")
     def test_run_epoch_uses_batch_size_for_optimizer_steps(self):

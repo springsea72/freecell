@@ -24,6 +24,7 @@ def args(output_dir, **overrides):
         "comparison_negatives_per_sample": 0,
         "comparison_negative_strategy": "random",
         "comparison_loss_weight": 0.0,
+        "extra_comparison_dataset": None,
         "lr": 0.001,
         "device": "cpu",
         "validation_split": 0.0,
@@ -260,11 +261,15 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(0.1, manifest["train_summary"]["progress_loss_weight"])
             self.assertEqual(0, manifest["parameters"]["comparison_negatives_per_sample"])
             self.assertEqual("random", manifest["parameters"]["comparison_negative_strategy"])
+            self.assertEqual([], manifest["parameters"]["extra_comparison_datasets"])
             self.assertEqual(0.0, manifest["parameters"]["comparison_loss_weight"])
             self.assertIsNone(manifest["paths"]["comparison_dataset"])
+            self.assertEqual([], manifest["paths"]["comparison_datasets"])
+            self.assertEqual([], manifest["paths"]["extra_comparison_datasets"])
             self.assertEqual(0, manifest["summary"]["comparison_samples"])
             self.assertEqual(0, manifest["training"]["comparison_samples"])
             self.assertEqual("random", manifest["training"]["comparison_negative_strategy"])
+            self.assertEqual([], manifest["training"]["extra_comparison_datasets"])
             self.assertEqual(0.0, manifest["training"]["comparison_loss_weight"])
             self.assertEqual(0.001, manifest["training"]["lr"])
             self.assert_path_under(manifest["paths"]["dataset"], output_dir)
@@ -326,6 +331,54 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(2, manifest["training"]["comparison_samples"])
         self.assertEqual("heuristic_bad", manifest["training"]["comparison_negative_strategy"])
         self.assert_path_under(manifest["paths"]["comparison_dataset"], output_dir)
+
+    def test_extra_comparison_dataset_is_passed_to_train_and_recorded(self):
+        solved = SolveResult(True, [], 1, 0, 0, "won")
+
+        def fake_train(train_args):
+            self.assertIsInstance(train_args.comparison_dataset, list)
+            self.assertEqual(2, len(train_args.comparison_dataset))
+            self.assert_path_under(train_args.comparison_dataset[0], output_dir)
+            self.assertEqual(extra_dataset, train_args.comparison_dataset[1])
+            return {
+                "device": "cpu",
+                "train_accuracy": 0.25,
+                "validation_accuracy": 0.5,
+                "comparison_samples": 8,
+                "comparison_loss": 0.7,
+                "comparison_accuracy": 0.6,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "experiment"
+            extra_dataset = Path(tmpdir) / "extra_pairs.jsonl"
+            extra_dataset.write_text("{}\n", encoding="utf-8")
+            with patch("experiment.solve", return_value=solved), patch("experiment.save_trace"), patch(
+                "experiment.build_dataset", return_value={"samples_written": 3}
+            ), patch(
+                "experiment.comparison_dataset_builder.build_comparison_dataset",
+                return_value={"samples_read": 3, "pairs_written": 2, "skipped_no_negative": 1},
+            ), patch("experiment.train_policy.train", side_effect=fake_train), patch(
+                "experiment.report.build_report", return_value={"ok": True}
+            ), patch("experiment.report.render_json", return_value="{}"):
+                summary = experiment.run_experiment(
+                    args(
+                        output_dir,
+                        comparison_negatives_per_sample=1,
+                        extra_comparison_dataset=[extra_dataset],
+                        comparison_loss_weight=0.25,
+                    )
+                )
+
+            manifest = json.loads(Path(summary["manifest_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(8, summary["comparison_samples"])
+        self.assertEqual([str(extra_dataset)], manifest["parameters"]["extra_comparison_datasets"])
+        self.assertEqual([str(extra_dataset)], manifest["paths"]["extra_comparison_datasets"])
+        self.assertEqual([str(extra_dataset)], manifest["training"]["extra_comparison_datasets"])
+        self.assertEqual(2, len(manifest["paths"]["comparison_datasets"]))
+        self.assertEqual(8, manifest["training"]["comparison_samples"])
+        self.assertEqual(8, manifest["summary"]["comparison_samples"])
 
     def test_summary_fields_are_stable(self):
         summary = {

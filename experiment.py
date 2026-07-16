@@ -39,6 +39,7 @@ def parse_args(argv=None):
         default=comparison_dataset_builder.DEFAULT_NEGATIVE_STRATEGY,
     )
     parser.add_argument("--comparison-loss-weight", type=float, default=0.0)
+    parser.add_argument("--extra-comparison-dataset", action="append")
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--validation-split", type=float, default=0.2)
@@ -125,7 +126,7 @@ def run_experiment(args) -> dict:
         "pairs_written": 0,
         "skipped_no_negative": 0,
     }
-    train_comparison_dataset = None
+    train_comparison_datasets = []
     if args.comparison_negatives_per_sample > 0:
         comparison_summary = comparison_dataset_builder.build_comparison_dataset(
             dataset_path,
@@ -134,7 +135,9 @@ def run_experiment(args) -> dict:
             negative_strategy=args.comparison_negative_strategy,
             seed=args.training_seed,
         )
-        train_comparison_dataset = comparison_dataset_path
+        train_comparison_datasets.append(comparison_dataset_path)
+    train_comparison_datasets.extend(Path(path) for path in (args.extra_comparison_dataset or []))
+    train_comparison_dataset = _comparison_dataset_arg(train_comparison_datasets)
 
     train_summary = train_policy.train(
         SimpleNamespace(
@@ -178,10 +181,11 @@ def run_experiment(args) -> dict:
         "device": train_summary["device"],
         "train_accuracy": train_summary["train_accuracy"],
         "validation_accuracy": train_summary["validation_accuracy"],
-        "comparison_samples": comparison_summary["pairs_written"],
+        "comparison_samples": train_summary.get("comparison_samples", comparison_summary["pairs_written"]),
         "comparison_loss": train_summary.get("comparison_loss", 0.0),
         "comparison_accuracy": train_summary.get("comparison_accuracy", 0.0),
-        "comparison_dataset_path": None if train_comparison_dataset is None else str(train_comparison_dataset),
+        "comparison_dataset_path": None if not train_comparison_datasets else str(train_comparison_datasets[0]),
+        "comparison_dataset_paths": [str(path) for path in train_comparison_datasets],
         "trace_dir": str(trace_dir),
         "dataset_path": str(dataset_path),
         "output_dir": str(output_dir),
@@ -192,7 +196,8 @@ def run_experiment(args) -> dict:
         seeds=seeds,
         solved_trace_paths=solved_trace_paths,
         dataset_path=dataset_path,
-        comparison_dataset_path=train_comparison_dataset,
+        comparison_dataset_path=None if not train_comparison_datasets else train_comparison_datasets[0],
+        comparison_dataset_paths=train_comparison_datasets,
         comparison_summary=comparison_summary,
         model_path=model_path,
         report_paths=report_paths,
@@ -233,6 +238,7 @@ def _write_manifest(
     solved_trace_paths: list[Path],
     dataset_path: Path,
     comparison_dataset_path,
+    comparison_dataset_paths: list[Path],
     comparison_summary: dict,
     model_path: Path,
     report_paths: list[Path],
@@ -251,6 +257,7 @@ def _write_manifest(
             "progress_loss_weight": args.progress_loss_weight,
             "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
             "comparison_negative_strategy": args.comparison_negative_strategy,
+            "extra_comparison_datasets": [str(path) for path in (args.extra_comparison_dataset or [])],
             "comparison_loss_weight": args.comparison_loss_weight,
             "lr": args.lr,
             "device": args.device,
@@ -282,6 +289,8 @@ def _write_manifest(
         "paths": {
             "dataset": str(dataset_path),
             "comparison_dataset": None if comparison_dataset_path is None else str(comparison_dataset_path),
+            "comparison_datasets": [str(path) for path in comparison_dataset_paths],
+            "extra_comparison_datasets": [str(path) for path in (args.extra_comparison_dataset or [])],
             "model": str(model_path),
             "reports": [str(path) for path in report_paths],
             "traces": [str(path) for path in solved_trace_paths],
@@ -293,9 +302,11 @@ def _write_manifest(
             "progress_loss_weight": args.progress_loss_weight,
             "comparison_negatives_per_sample": args.comparison_negatives_per_sample,
             "comparison_negative_strategy": args.comparison_negative_strategy,
+            "extra_comparison_datasets": [str(path) for path in (args.extra_comparison_dataset or [])],
             "comparison_loss_weight": args.comparison_loss_weight,
             "comparison_dataset": None if comparison_dataset_path is None else str(comparison_dataset_path),
-            "comparison_samples": comparison_summary["pairs_written"],
+            "comparison_datasets": [str(path) for path in comparison_dataset_paths],
+            "comparison_samples": summary["comparison_samples"],
             "lr": args.lr,
             "validation_split": args.validation_split,
             "device": summary["device"],
@@ -312,6 +323,14 @@ def _summary_report_path(paths: list[Path]) -> str:
     if len(paths) == 1:
         return str(paths[0])
     return ",".join(str(path) for path in paths)
+
+
+def _comparison_dataset_arg(paths: list[Path]):
+    if not paths:
+        return None
+    if len(paths) == 1:
+        return paths[0]
+    return list(paths)
 
 
 def _assert_under_output(output_dir: Path, *paths: Path) -> None:
